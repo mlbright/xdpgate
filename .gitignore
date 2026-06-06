@@ -1,3 +1,7 @@
+# build artifacts
+xdpgate.bpf.o
+xdpgate-load
+xdpgate-ctl
 # Prerequisites
 *.d
 

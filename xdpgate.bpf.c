@@ -2,17 +2,19 @@
 /* xdpgate.bpf.c - default-deny gate for protected destination IPs.
  *
  * Decision order for every inbound packet:
- *   1. Non-IP (ARP, etc.)                    -> PASS (don't break the LAN)
- *   2. SPA port / Tailscale / SSH (any dest) -> PASS (unconditional carve-outs)
- *   3. Destination not in protected set      -> PASS (we only gate those IPs)
+ *   1. Non-IP (ARP, etc.)               -> PASS (don't break the LAN)
+ *   2. SPA port (any dest)              -> PASS (unconditional carve-out)
+ *   3. Destination not in protected set -> PASS (we only gate those IPs)
  *   4. Destination IS protected:
  *        - (src,proto,dport) in allow map and not expired -> PASS
  *        - otherwise                                      -> DROP
  *
- * The carve-outs are checked BEFORE the protected lookup, so the SPA packet,
- * Tailscale, and SSH survive even if they share an IP with a protected service.
- * This is also why fwknopd (which sniffs via AF_PACKET, downstream of XDP)
- * can still receive the SPA that authorises everything else.
+ * The SPA carve-out is checked BEFORE the protected lookup so the SPA packet
+ * survives even when it shares an IP with a protected service. This is also why
+ * fwknopd (which sniffs via AF_PACKET, downstream of XDP) can still receive the
+ * SPA that authorises everything else. Management traffic (SSH, WireGuard/
+ * Tailscale, etc.) is expected to live on separate, non-protected IPs and is
+ * therefore never gated in the first place.
  */
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
@@ -62,10 +64,6 @@ struct {
 static __always_inline int carve_out(__u8 proto, __u16 dport_be)
 {
 	if (proto == IPPROTO_UDP && dport_be == bpf_htons(SPA_PORT))
-		return 1;
-	if (proto == IPPROTO_UDP && dport_be == bpf_htons(WG_PORT))
-		return 1;
-	if (proto == IPPROTO_TCP && dport_be == bpf_htons(SSH_PORT))
 		return 1;
 	return 0;
 }

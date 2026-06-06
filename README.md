@@ -9,9 +9,7 @@ map via `CMD_CYCLE_OPEN`/`CMD_CYCLE_CLOSE`; the kernel enforces expiry.
 inbound packet
    │
    ├─ non-IP (ARP…) ─────────────────────────────► PASS
-   ├─ UDP/62201 (SPA)  ┐
-   ├─ UDP/41641 (WG)   ├─ unconditional carve-outs ► PASS
-   ├─ TCP/22  (SSH)    ┘
+   ├─ UDP/62201 (SPA) ── unconditional carve-out ─► PASS
    ├─ dest ∉ protected set ──────────────────────► PASS
    └─ dest ∈ protected set:
         (src,proto,dport) in allow map & unexpired ► PASS
@@ -29,38 +27,44 @@ inbound packet
 
 ## Build & install
 
+Developed and tested on **Ubuntu 24.04 LTS (Noble Numbat)**.
+
 ```sh
-# Ubuntu 24.04 deps:
-apt-get install -y clang llvm libbpf-dev libelf-dev make
+make deps               # installs clang llvm libbpf-dev libelf-dev make (via apt)
 make
 make install            # /usr/local/sbin + /usr/local/lib/xdpgate + units
 ```
 
+The optional `make verify` target additionally needs `bpftool`, which ships in
+the kernel tooling: `apt-get install linux-tools-$(uname -r)`.
+
 ## Deploy without locking yourself out
 
-The order matters. Keep an SSH session open throughout.
+The order matters. Keep an SSH session open throughout, and **make sure your
+management plane (SSH, WireGuard/Tailscale, etc.) lives on IPs you never add to
+the protected set** — the only carve-out is the SPA port, so anything on a
+protected IP is gated.
 
 1. `make install`, set `IFACE=` in `xdpgate.service` to your primary ENI.
 2. `systemctl enable --now xdpgate.service` — attaches the gate. At this point
    **nothing is gated yet** (the protected set is empty), so this is safe.
 3. Seed the protected destinations *last*:
-
    ```sh
    xdpgate-ctl add-protected 2001:db8::1234     # a service /128
    xdpgate-ctl add-protected 203.0.113.50
    ```
-
 4. Wire up fwknopd (see `access.conf.example`) and `systemctl enable --now
    xdpgate-gc.timer`.
 5. Verify from a second host: connection to the protected service should fail;
    after a successful `fwknop` knock it should succeed for the timeout window.
    `xdpgate-ctl list` shows live grants and countdowns.
 
-Because **SSH (tcp/22) and Tailscale (udp/41641) are unconditional carve-outs**
-and only protected *destinations* are gated, the management plane survives even
-if it shares an IP with a protected service. Still, prefer to keep your
-SSH/Tailscale IP distinct from the protected service IPs — the carve-outs are a
-backstop, not the primary safety mechanism.
+Only protected *destinations* are gated, so the management plane survives as
+long as it does **not** share an IP with a protected service. There is no
+carve-out for SSH or WireGuard/Tailscale: keep those (and any other essential
+traffic) on separate IPs — typically distinct IPv6 addresses — that you never
+add to the protected set. The SPA port (udp/62201) is the only unconditional
+carve-out, and it exists purely so fwknopd can receive the knock.
 
 ## Why the SPA carve-out is mandatory (even in generic mode)
 

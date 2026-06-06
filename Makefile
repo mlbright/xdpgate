@@ -1,15 +1,26 @@
 # xdpgate Makefile
-# Build deps (Ubuntu 24.04): clang llvm libbpf-dev libelf-dev make
+# Development platform: Ubuntu 24.04 LTS (Noble Numbat).
+# Install the build toolchain with `make deps` (or see the package list below).
 CLANG    ?= clang
 CC       ?= cc
 ARCH     := $(shell uname -m | sed 's/x86_64/x86/;s/aarch64/arm64/')
 MULTIARCH := $(shell uname -m)-linux-gnu
+
+# Core build dependencies (apt package names on Ubuntu 24.04 LTS).
+# The optional `verify` target also needs bpftool, which ships in the
+# kernel tooling: apt-get install linux-tools-$(shell uname -r)
+APT_DEPS := clang llvm libbpf-dev libelf-dev make
 
 BPF_CFLAGS := -O2 -g -Wall -target bpf -D__TARGET_ARCH_$(ARCH) -I/usr/include/$(MULTIARCH)
 USR_CFLAGS := -O2 -g -Wall
 LIBS       := -lbpf
 
 all: xdpgate.bpf.o xdpgate-load xdpgate-ctl
+
+# Install the core build dependencies (Ubuntu 24.04 LTS).
+deps:
+	sudo apt-get update
+	sudo apt-get install -y $(APT_DEPS)
 
 xdpgate.bpf.o: xdpgate.bpf.c common.h
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
@@ -38,4 +49,4 @@ install: all
 	@echo "Edit IFACE= in /etc/systemd/system/xdpgate.service, then:"
 	@echo "  systemctl daemon-reload && systemctl enable --now xdpgate.service xdpgate-gc.timer"
 
-.PHONY: all clean verify install
+.PHONY: all deps clean verify install

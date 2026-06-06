@@ -11,10 +11,8 @@
 
 #define XDPGATE_PIN_DIR "/sys/fs/bpf/xdpgate"
 
-/* ---- always-allow carve-outs (see README for rationale) ---------------- */
+/* ---- always-allow carve-out (see README for rationale) ----------------- */
 #define SPA_PORT 62201   /* fwknopd default SPA UDP port - MUST pass-through  */
-#define WG_PORT  41641   /* Tailscale / WireGuard default UDP listen port     */
-#define SSH_PORT 22      /* management SSH - always reachable (break-glass)   */
 
 /* Set to 1 to let ICMP/ICMPv6 reach protected destinations. Default 0 (strict
  * deny). Note: 0 will blackhole PMTUD ("frag needed" / "packet too big") to
