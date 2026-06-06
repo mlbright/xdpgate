@@ -1,0 +1,8 @@
+[Unit]
+Description=xdpgate - reap expired allow entries (missed-close backstop)
+After=xdpgate.service
+Requires=xdpgate.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xdpgate-ctl gc

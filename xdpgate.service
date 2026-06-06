@@ -1,0 +1,18 @@
+[Unit]
+Description=xdpgate - attach XDP default-deny gate (generic mode)
+Wants=network-online.target
+After=network-online.target sys-fs-bpf.mount
+# Must run before fwknopd so the maps exist when the first SPA arrives.
+Before=fwknop.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/usr/local/lib/xdpgate
+# Edit IFACE to your primary ENI (e.g. ens5 on EC2).
+Environment=IFACE=ens5
+ExecStart=/usr/local/sbin/xdpgate-load attach ${IFACE} /usr/local/lib/xdpgate/xdpgate.bpf.o
+ExecStop=/usr/local/sbin/xdpgate-load detach ${IFACE}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+# access.conf.example  —  fwknopd integration for the XDP gate.
+#
+# Add the CMD_CYCLE_* directives to your existing access stanza. fwknopd
+# executes CMD_CYCLE_OPEN after a valid SPA and CMD_CYCLE_CLOSE after the
+# timer expires, substituting the SPA-derived values.
+#
+# Substitution tokens (verified against fwknopd(8)):
+#   $SRC      allow IP from the SPA payload      (== $IP)
+#   $PKT_SRC  L3 source of the SPA packet itself (differs under NAT)
+#   $DST      destination IP
+#   $PROTO    tcp | udp
+#   $PORT     allow port
+#   $TIMEOUT  client-requested timeout, if any (may be empty)
+
+SOURCE                 ANY
+# Restrict what a client is even allowed to request. Keep this tight.
+OPEN_PORTS             tcp/443
+REQUIRE_SOURCE_ADDRESS Y
+HMAC_KEY_BASE64        <your-hmac-key>
+KEY_BASE64             <your-rijndael-key>
+
+# --- the XDP gate hooks ------------------------------------------------------
+# Open exactly the (src, proto, port) the SPA requested. We pass an explicit
+# timeout that MATCHES CMD_CYCLE_TIMER so the in-kernel expiry and the close
+# command line up; the kernel expiry is the fail-closed backstop if the close
+# is ever missed. (You may use $TIMEOUT instead of the literal 30 to honour a
+# client-requested duration; xdpgate-ctl falls back to its own default if the
+# value is empty.)
+CMD_CYCLE_OPEN   /usr/local/sbin/xdpgate-ctl open $SRC $PROTO $PORT 30
+CMD_CYCLE_CLOSE  /usr/local/sbin/xdpgate-ctl close $SRC $PROTO $PORT
+CMD_CYCLE_TIMER  30
+
+# IMPORTANT — multi-port SPAs: fwknopd runs CMD_CYCLE_OPEN only for the FIRST
+# port in a list (mrash/fwknop#327). With the (src,proto,port) model that means
+# one port per SPA. Send separate SPAs for separate ports, or widen the map key
+# to a port set if you need multi-port grants in one knock.

@@ -1,0 +1,10 @@
+[Unit]
+Description=xdpgate periodic GC
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
