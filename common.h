@@ -12,7 +12,7 @@
 #define XDPGATE_PIN_DIR "/sys/fs/bpf/xdpgate"
 
 /* ---- always-allow carve-out (see README for rationale) ----------------- */
-#define SPA_PORT 62201   /* fwknopd default SPA UDP port - MUST pass-through  */
+#define SPA_PORT 62159   /* fwknopd default SPA UDP port - MUST pass-through  */
 
 /* Set to 1 to let ICMP/ICMPv6 reach protected destinations. Default 0 (strict
  * deny). Note: 0 will blackhole PMTUD ("frag needed" / "packet too big") to

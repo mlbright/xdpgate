@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""whats-on-ip - list which listening sockets are reachable on a given local IP.
+
+This reproduces, mechanically, the reasoning used to decide "what is listening
+on address X": a socket bound to a wildcard (0.0.0.0, ::, or *) answers on
+*every* local address of its family, not just the one it appears to name. So
+"nothing is bound specifically to X" is not the same as "nothing listens on X".
+
+Usage:
+    whats-on-ip                 # classify every listener, grouped by reach
+    whats-on-ip <ip>            # only sockets reachable on that local IP
+    whats-on-ip --self          # one section per non-loopback local IP
+    whats-on-ip --preflight     # warn if a protected IP carries Tailscale/mgmt
+
+Needs `ss` (iproute2). Run with sudo to see process names. --preflight also
+reads the gate's protected set (xdpgate-ctl) and Tailscale's underlay endpoints.
+"""
+
+import argparse
+import ipaddress
+import json
+import re
+import shutil
+import subprocess
+import sys
+
+WILDCARD4 = "0.0.0.0"
+WILDCARD6 = "::"
+DUAL = "*"          # ss prints this for a dual-stack (v6only=0) wildcard socket
+
+# Overlap severities for the preflight check.
+HARD = "HARD"   # protecting this WILL break things (default-route source: the
+                # return path of every host-originated flow, stateless XDP)
+SOFT = "SOFT"   # protecting this MIGHT break things (a candidate Tailscale
+                # endpoint a peer could pick, but may never use)
+
+
+class Listener:
+    __slots__ = ("proto", "addr", "scope", "port", "process")
+
+    def __init__(self, proto, addr, scope, port, process):
+        self.proto = proto      # "tcp" | "udp"
+        self.addr = addr        # "0.0.0.0" | "::" | "*" | a literal IP
+        self.scope = scope      # interface name for link-local, else None
+        self.port = port        # int
+        self.process = process  # "name/pid" or "-"
+
+
+def run_ss():
+    """Return raw `ss` lines for TCP+UDP listeners, no header."""
+    try:
+        out = subprocess.run(
+            ["ss", "-tulnpH"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except FileNotFoundError:
+        sys.exit("error: `ss` not found (install iproute2)")
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"error: ss failed: {e.stderr.strip()}")
+    return out.splitlines()
+
+
+def parse_process(field):
+    """users:(("sshd",pid=2614,fd=3),...) -> 'sshd/2614' (first entry)."""
+    m = re.search(r'\(\("([^"]+)",pid=(\d+)', field)
+    return f"{m.group(1)}/{m.group(2)}" if m else "-"
+
+
+def parse_local(addr_port):
+    """'[2600::1]%ens5:443' -> ('2600::1', 'ens5', 443). '*:443' -> ('*', None, 443)."""
+    host, _, port = addr_port.rpartition(":")
+    host = host.strip("[]")
+    scope = None
+    if "%" in host:
+        host, scope = host.split("%", 1)
+    return host, scope, int(port)
+
+
+def parse_listeners(lines):
+    listeners = []
+    for ln in lines:
+        cols = ln.split()
+        # With -t and -u combined, ss prepends a Netid column:
+        #   Netid State Recv-Q Send-Q Local Peer [Process]
+        if len(cols) < 6:
+            continue
+        proto = cols[0]                       # "tcp" | "udp" | "tcp6" ...
+        local = cols[4]
+        process = parse_process(cols[6]) if len(cols) >= 7 else "-"
+        addr, scope, port = parse_local(local)
+        listeners.append(Listener(proto, addr, scope, port, process))
+    return listeners
+
+
+def family(addr):
+    if addr == WILDCARD4:
+        return 4
+    if addr in (WILDCARD6, DUAL):
+        return 6 if addr == WILDCARD6 else 0  # 0 == both
+    try:
+        return ipaddress.ip_address(addr).version
+    except ValueError:
+        return None
+
+
+def reachable_on(l: Listener, target: ipaddress._BaseAddress) -> bool:
+    """Would a packet to local address `target` be accepted by listener `l`?"""
+    # Link-local binds only answer within their interface scope; a routable
+    # target never matches one. (We don't try to resolve the target's scope.)
+    if l.scope is not None:
+        return False
+    if l.addr == DUAL:                       # dual-stack wildcard: any family
+        return True
+    if l.addr == WILDCARD4:
+        return target.version == 4
+    if l.addr == WILDCARD6:
+        return target.version == 6
+    try:
+        return ipaddress.ip_address(l.addr) == target
+    except ValueError:
+        return False
+
+
+def is_loopback(l: Listener) -> bool:
+    try:
+        return ipaddress.ip_address(l.addr).is_loopback
+    except ValueError:
+        return False  # wildcards / '*' are not loopback
+
+
+def host_ips():
+    """Non-loopback, non-link-local IPs assigned to this host (via `ip`)."""
+    out = subprocess.run(
+        ["ip", "-o", "addr", "show", "scope", "global"],
+        capture_output=True, text=True,
+    ).stdout
+    ips = []
+    for ln in out.splitlines():
+        m = re.search(r'\binet6?\s+([0-9a-fA-F:.]+)/', ln)
+        if m:
+            ips.append(m.group(1))
+    return ips
+
+
+def norm(ip):
+    """Canonical string form of an IP, so 2600:0:..:0:1 == 2600::1 on compare."""
+    return str(ipaddress.ip_address(ip))
+
+
+def management_ips():
+    """Local IPs you must NOT add to the protected set, each mapped to a dict of
+    {reason: severity}. Two sources:
+
+      * the default-route source address per family — where NAT delivers the
+        encrypted WireGuard datagram, and (because XDP is stateless and ingress
+        only) where the return path of every host-originated flow lands. This is
+        a HARD overlap: protecting it WILL break traffic.
+      * Tailscale's advertised endpoints (Self.Addrs) that are local to this
+        host. tailscaled wildcard-binds udp/41641, so a peer *could* reach any
+        of these directly. This is a SOFT overlap: it may never be the path in
+        use, but protecting it risks dropping a live tunnel.
+
+    When an address is both, the HARD reason wins.
+    """
+    reasons = {}
+
+    def add(ip, sev, why):
+        reasons.setdefault(norm(ip), {})[why] = sev
+
+    for fam, probe in ((4, "1.1.1.1"), (6, "2606:4700:4700::1111")):
+        try:
+            out = subprocess.run(["ip", f"-{fam}", "-o", "route", "get", probe],
+                                 capture_output=True, text=True).stdout
+        except FileNotFoundError:
+            continue
+        m = re.search(r"\bsrc\s+([0-9a-fA-F:.]+)", out)
+        if m:
+            add(m.group(1), HARD, f"default v{fam} source (stateless return path)")
+
+    local = {norm(ip) for ip in host_ips()}
+    ts = shutil.which("tailscale")
+    if ts:
+        res = subprocess.run([ts, "status", "--json"],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            try:
+                addrs = (json.loads(res.stdout).get("Self") or {}).get("Addrs") or []
+            except json.JSONDecodeError:
+                addrs = []
+            for ep in addrs:
+                addr, _, _ = parse_local(ep)
+                if norm(addr) in local:          # ignore the public NAT side
+                    add(addr, SOFT, "Tailscale underlay endpoint")
+    return reasons
+
+
+def worst_severity(reason_map):
+    """HARD if any reason is HARD, else SOFT."""
+    return HARD if HARD in reason_map.values() else SOFT
+
+
+def protected_set():
+    """(list_of_ips, attached?). Parses `xdpgate-ctl list` output."""
+    ctl = shutil.which("xdpgate-ctl") or "./xdpgate-ctl"
+    try:
+        res = subprocess.run([ctl, "list"], capture_output=True, text=True)
+    except FileNotFoundError:
+        sys.exit("error: xdpgate-ctl not found (build it or add to PATH)")
+    attached = "is xdpgate-load attached" not in res.stderr
+    ips = re.findall(r"^\s*protected v[46]\s+(\S+)", res.stdout, re.MULTILINE)
+    return ips, attached
+
+
+def cmd_preflight(listeners, strict=False):
+    prot, attached = protected_set()
+    if not attached:
+        print("gate not attached: protected set is empty, nothing gated yet.")
+        return 0
+    if not prot:
+        print("gate attached, protected set is empty: nothing gated yet.")
+        return 0
+
+    mgmt = management_ips()
+    print("Tailscale/management IPs (must NOT be protected):")
+    for ip in sorted(mgmt):
+        sev = worst_severity(mgmt[ip])
+        print(f"  [{sev}] {ip}  -- {', '.join(sorted(mgmt[ip]))}")
+
+    hard = soft = False
+    for ip in prot:
+        target = ipaddress.ip_address(ip)
+        why = mgmt.get(norm(ip))
+        flag = ""
+        if why:
+            sev = worst_severity(why)
+            verb = "WILL break" if sev == HARD else "MAY break"
+            flag = f"  *** {sev} overlap, {verb}: {', '.join(sorted(why))} ***"
+            if sev == HARD:
+                hard = True
+            else:
+                soft = True
+        print(f"\nprotected {ip}{flag}")
+        print_table(listeners, target)
+
+    print()
+    if hard:
+        print("FAIL: a protected IP is a default-route source (HARD overlap) — "
+              "the gate will drop its own return traffic. del-protected it or "
+              "move the service to a dedicated address.")
+        return 1
+    if soft and strict:
+        print("FAIL (--strict): a protected IP is a candidate Tailscale endpoint "
+              "(SOFT overlap).")
+        return 1
+    if soft:
+        print("WARN: a protected IP is a candidate Tailscale endpoint (SOFT "
+              "overlap) — a peer could pick that path. Re-run with --strict to "
+              "treat this as a failure, or move the service to a dedicated IP.")
+        return 0
+    print("OK: no protected IP overlaps a Tailscale underlay / management address.")
+    return 0
+
+
+def print_table(listeners, target):
+    rows = [l for l in listeners if reachable_on(l, target)]
+    rows.sort(key=lambda l: (l.proto, l.port))
+    if not rows:
+        print(f"  (nothing reachable on {target})")
+        return
+    w_proc = max((len(l.process) for l in rows), default=7)
+    print(f"  {'PROTO':5}  {'PORT':>6}  {'BIND':17}  PROCESS")
+    for l in rows:
+        kind = "(wildcard)" if l.addr in (DUAL, WILDCARD4, WILDCARD6) else "(specific)"
+        print(f"  {l.proto:5}  {l.port:>6}  {l.addr:17}  {l.process}  {kind}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("ip", nargs="?", help="local IP to test reachability for")
+    g.add_argument("--self", action="store_true",
+                   help="report for every global IP on this host")
+    g.add_argument("--preflight", action="store_true",
+                   help="warn if any protected IP carries Tailscale/management traffic")
+    ap.add_argument("--strict", action="store_true",
+                    help="with --preflight, fail on SOFT overlaps too (not just HARD)")
+    args = ap.parse_args()
+
+    listeners = [l for l in parse_listeners(run_ss()) if not is_loopback(l)]
+
+    if args.preflight:
+        sys.exit(cmd_preflight(listeners, strict=args.strict))
+    if args.strict:
+        ap.error("--strict only applies with --preflight")
+
+    if args.self:
+        targets = host_ips()
+        if not targets:
+            sys.exit("no global-scope IPs found")
+    elif args.ip:
+        targets = [args.ip]
+    else:
+        # No target: just dump everything, flagging wildcard binds.
+        listeners.sort(key=lambda l: (l.proto, l.port))
+        print(f"{'PROTO':5}  {'PORT':>6}  {'BIND':40}  PROCESS")
+        for l in listeners:
+            b = l.addr + (f"%{l.scope}" if l.scope else "")
+            tag = " (wildcard - answers on all local IPs)" if l.addr in (
+                DUAL, WILDCARD4, WILDCARD6) else ""
+            print(f"{l.proto:5}  {l.port:>6}  {b:40}  {l.process}{tag}")
+        return
+
+    for t in targets:
+        try:
+            target = ipaddress.ip_address(t)
+        except ValueError:
+            sys.exit(f"not an IP address: {t}")
+        print(f"\nReachable on {target}:")
+        print_table(listeners, target)
+
+
+if __name__ == "__main__":
+    main()

@@ -37,16 +37,26 @@ verify: xdpgate.bpf.o
 		type xdp && bpftool prog | tail -3 && \
 		rm -f /sys/fs/bpf/xdpgate_verify_test
 
+# Audit which listeners are exposed on each local IP (uses ss; run as root for
+# process names). Helps pick an IP that does NOT share the management plane.
+audit:
+	@./whats-on-ip --self
+
+# Preflight: fail if any protected IP carries Tailscale underlay / management
+# traffic. Run after seeding the protected set, before relying on the gate.
+preflight:
+	@./whats-on-ip --preflight
+
 clean:
 	rm -f xdpgate.bpf.o xdpgate-load xdpgate-ctl
 
 install: all
 	install -d /usr/local/sbin /usr/local/lib/xdpgate
-	install -m 0755 xdpgate-load xdpgate-ctl /usr/local/sbin/
+	install -m 0755 xdpgate-load xdpgate-ctl whats-on-ip /usr/local/sbin/
 	install -m 0644 xdpgate.bpf.o /usr/local/lib/xdpgate/
 	install -m 0644 xdpgate.service xdpgate-gc.service xdpgate-gc.timer \
 		/etc/systemd/system/
 	@echo "Edit IFACE= in /etc/systemd/system/xdpgate.service, then:"
 	@echo "  systemctl daemon-reload && systemctl enable --now xdpgate.service xdpgate-gc.timer"
 
-.PHONY: all deps clean verify install
+.PHONY: all deps clean verify audit preflight install

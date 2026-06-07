@@ -23,6 +23,12 @@ inbound packet
   the four maps under `/sys/fs/bpf/xdpgate`. Run once at boot.
 - `xdpgate-ctl` — per-SPA map editor + operator tooling
   (`open`/`close`/`add-protected`/`del-protected`/`list`/`gc`).
+- `whats-on-ip` — audit helper. Lists which listening sockets are actually
+  reachable on a given local IP (wildcard binds answer on *every* address, so
+  "nothing bound specifically to X" ≠ "nothing listening on X"). Its
+  `--preflight` mode grades each protected IP's overlap with the management
+  plane as HARD (default-route source — fails) or SOFT (candidate Tailscale
+  endpoint — warns; `--strict` fails). Used by `make audit` / `make preflight`.
 - `access.conf.example`, systemd units.
 
 ## Build & install
@@ -46,6 +52,8 @@ the protected set** — the only carve-out is the SPA port, so anything on a
 protected IP is gated.
 
 1. `make install`, set `IFACE=` in `xdpgate.service` to your primary ENI.
+   Run `sudo ./whats-on-ip --self` first to see what each local IP exposes and
+   pick a service address that does **not** share the management plane.
 2. `systemctl enable --now xdpgate.service` — attaches the gate. At this point
    **nothing is gated yet** (the protected set is empty), so this is safe.
 3. Seed the protected destinations *last*:
@@ -53,6 +61,16 @@ protected IP is gated.
    xdpgate-ctl add-protected 2001:db8::1234     # a service /128
    xdpgate-ctl add-protected 203.0.113.50
    ```
+   Then run `sudo whats-on-ip --preflight` (or `make preflight`). It grades
+   each overlap:
+   - **HARD** — the IP is a default-route source, so stateless XDP would drop
+     the return path of the host's own outbound traffic. The check **fails**
+     (exit 1); fix it before proceeding.
+   - **SOFT** — the IP is merely a candidate Tailscale endpoint a peer *might*
+     pick. The check **warns** (exit 0). Pass `--strict` to fail on these too.
+
+   The safest service address is one the check doesn't flag at all — typically
+   a dedicated IP you assign solely to the service.
 4. Wire up fwknopd (see `access.conf.example`) and `systemctl enable --now
    xdpgate-gc.timer`.
 5. Verify from a second host: connection to the protected service should fail;
@@ -120,5 +138,7 @@ xdpgate-ctl close 203.0.113.9 tcp 443      # revoke now
 xdpgate-ctl add-protected 203.0.113.50     # start gating a dest
 xdpgate-ctl list                           # protected set + live grants
 xdpgate-ctl gc                             # reap expired (timer does this)
+whats-on-ip --self                         # audit: what's exposed per local IP
+whats-on-ip --preflight                    # fail if a protected IP is mgmt/Tailscale
 xdpgate-load detach ens5                   # remove gate + pins
 ```
