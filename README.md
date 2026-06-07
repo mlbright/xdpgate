@@ -1,4 +1,4 @@
-# xdpgate — XDP default-deny gate driven by fwknop SPA
+# xdpgate — XDP default-deny gate for use with fwknop SPA
 
 A default-deny gate for a set of **protected destination IPs** (v4 and v6).
 Traffic to a protected IP is dropped at the XDP hook unless a valid SPA has
