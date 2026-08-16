@@ -167,7 +167,58 @@ static const char *proto_str(__u8 p)
 	return p == IPPROTO_TCP ? "tcp" : p == IPPROTO_UDP ? "udp" : "?";
 }
 
-static void dump_allow_v4(__u64 now)
+/* Expiries are stored on CLOCK_MONOTONIC, which has no meaning as a date, so
+ * snapshot both clocks once per listing and convert relative to that pair. */
+struct clocks {
+	__u64  mono_ns;
+	time_t wall;
+};
+
+static void clocks_now(struct clocks *c)
+{
+	c->mono_ns = monotonic_ns();
+	c->wall = time(NULL);
+}
+
+/* "2d 23h 51m 31s", dropping leading zero units ("0s" for under a second). */
+static void fmt_duration(long long secs, char *buf, size_t len)
+{
+	long long d = secs / 86400; secs %= 86400;
+	long long h = secs / 3600;  secs %= 3600;
+	long long m = secs / 60;    secs %= 60;
+	size_t n = 0;
+
+	if (d) n += snprintf(buf + n, len - n, "%lldd ", d);
+	if (d || h) n += snprintf(buf + n, len - n, "%lldh ", h);
+	if (d || h || m) n += snprintf(buf + n, len - n, "%lldm ", m);
+	snprintf(buf + n, len - n, "%llds", secs);
+}
+
+static void print_expiry(__u64 expiry_ns, const struct clocks *c)
+{
+	if (!expiry_ns) {
+		printf("        no expiry\n");
+		return;
+	}
+
+	long long left = ((long long)expiry_ns - (long long)c->mono_ns) / 1000000000LL;
+	time_t when = c->wall + (time_t)left;
+
+	char tbuf[64], dbuf[64];
+	struct tm tm;
+	if (localtime_r(&when, &tm))
+		strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S %Z", &tm);
+	else
+		snprintf(tbuf, sizeof(tbuf), "?");
+
+	fmt_duration(left < 0 ? -left : left, dbuf, sizeof(dbuf));
+	if (left < 0)
+		printf("        expired %s (%s ago)\n", tbuf, dbuf);
+	else
+		printf("        expires %s (in %s)\n", tbuf, dbuf);
+}
+
+static void dump_allow_v4(const struct clocks *c)
 {
 	int fd = map_fd("allow_v4");
 	if (fd < 0) return;
@@ -180,15 +231,13 @@ static void dump_allow_v4(__u64 now)
 		first = 0; k = next;
 		if (bpf_map_lookup_elem(fd, &k, &v)) continue;
 		inet_ntop(AF_INET, &k.saddr, ip, sizeof(ip));
-		long left = v.expiry_ns ? (long)((v.expiry_ns - now) / 1000000000LL) : -1;
-		printf("  v4 %-15s %s/%-5u  %s\n", ip, proto_str(k.proto),
-		       ntohs(k.dport),
-		       left < 0 ? "(no expiry)" : "");
-		if (left >= 0) printf("        expires in %lds\n", left);
+		printf("  v4 %-15s %s/%-5u\n", ip, proto_str(k.proto),
+		       ntohs(k.dport));
+		print_expiry(v.expiry_ns, c);
 	}
 }
 
-static void dump_allow_v6(__u64 now)
+static void dump_allow_v6(const struct clocks *c)
 {
 	int fd = map_fd("allow_v6");
 	if (fd < 0) return;
@@ -201,10 +250,9 @@ static void dump_allow_v6(__u64 now)
 		first = 0; k = next;
 		if (bpf_map_lookup_elem(fd, &k, &v)) continue;
 		inet_ntop(AF_INET6, k.saddr, ip, sizeof(ip));
-		long left = v.expiry_ns ? (long)((v.expiry_ns - now) / 1000000000LL) : -1;
-		printf("  v6 [%s]:%s/%u  %s\n", ip, proto_str(k.proto),
-		       ntohs(k.dport), left < 0 ? "(no expiry)" : "");
-		if (left >= 0) printf("        expires in %lds\n", left);
+		printf("  v6 [%s]:%s/%u\n", ip, proto_str(k.proto),
+		       ntohs(k.dport));
+		print_expiry(v.expiry_ns, c);
 	}
 }
 
@@ -236,10 +284,11 @@ static void dump_protected(void)
 
 static int cmd_list(void)
 {
-	__u64 now = monotonic_ns();
+	struct clocks c;
+	clocks_now(&c);
 	dump_protected();
-	dump_allow_v4(now);
-	dump_allow_v6(now);
+	dump_allow_v4(&c);
+	dump_allow_v6(&c);
 	return 0;
 }
 
