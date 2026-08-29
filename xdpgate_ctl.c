@@ -6,12 +6,18 @@
  *   xdpgate-ctl close <ip> <tcp|udp> <port>
  *   xdpgate-ctl add-protected <ip>
  *   xdpgate-ctl del-protected <ip>
+ *   xdpgate-ctl reload
+ *   xdpgate-ctl export
  *   xdpgate-ctl list
  *   xdpgate-ctl gc
  *
  * IP family is auto-detected (':' => IPv6). Ports and addresses are written to
  * the maps in network byte order to match what the XDP program reads on-wire.
  * Expiry is CLOCK_MONOTONIC nanoseconds, the same clock as bpf_ktime_get_ns().
+ *
+ * The protected set is owned by /etc/xdpgate/protected.conf, not by this tool:
+ * `reload` makes the live maps equal that file, and add-protected/del-protected
+ * are transient overrides that the next reload or reboot undoes.
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -20,10 +26,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <bpf/bpf.h>
 
 #include "common.h"
+#include "protected_conf.h"
 
 #define DEFAULT_TIMEOUT_SECS 30   /* used when fwknop passes no $TIMEOUT */
 
@@ -159,6 +167,16 @@ static int cmd_protected(int argc, char **argv, int adding)
 		fprintf(stderr, "%s failed: %s\n", argv[1], strerror(errno));
 		return 1;
 	}
+
+	/* The config file is the source of truth; this only moved the live map,
+	 * and reconcile will move it back. Say so now rather than let it be a
+	 * surprise the next time something reloads. */
+	fprintf(stderr,
+		"warning: runtime only - the next reload or reboot %s this.\n"
+		"  %s %s %s %s to make it durable.\n",
+		adding ? "reverts" : "restores",
+		adding ? "Add" : "Remove", argv[2],
+		adding ? "to" : "from", prot_conf_path());
 	return 0;
 }
 
@@ -256,29 +274,68 @@ static void dump_allow_v6(const struct clocks *c)
 	}
 }
 
-static void dump_protected(void)
+/* Best-effort config load, for annotating `list` only. A box that has not been
+ * migrated yet still has to be able to list its maps, so a missing or broken
+ * config just means no annotations. Returns 1 if `out` is usable. */
+static int load_cfg_quiet(struct prot_set *out)
+{
+	memset(out, 0, sizeof(*out));
+	const char *path = prot_conf_path();
+	if (access(path, R_OK))
+		return 0;
+	return prot_set_parse(path, out) ? 0 : 1;
+}
+
+/* Live protected entries, tagged with where they came from. Entries that are
+ * in the config but NOT in the map print on a differently-prefixed line, so
+ * tools scraping "^\s*protected v[46] <ip>" only ever see addresses that are
+ * genuinely being gated right now. */
+static void dump_protected(const struct prot_set *cfg, int have_cfg)
 {
 	char ip[INET6_ADDRSTRLEN];
-	int fd = map_fd("protected_v4");
-	if (fd >= 0) {
+
+	int fd4 = map_fd("protected_v4");
+	if (fd4 >= 0) {
 		__u32 k, next; __u8 v; int first = 1; k = 0;
-		while (bpf_map_get_next_key(fd, first ? NULL : &k, &next) == 0) {
+		while (bpf_map_get_next_key(fd4, first ? NULL : &k, &next) == 0) {
 			first = 0; k = next;
-			if (bpf_map_lookup_elem(fd, &k, &v)) continue;
+			if (bpf_map_lookup_elem(fd4, &k, &v)) continue;
 			inet_ntop(AF_INET, &k, ip, sizeof(ip));
-			printf("  protected v4 %s\n", ip);
+			printf("  protected v4 %s%s\n", ip,
+			       (have_cfg && !prot_set_has_v4(cfg, k))
+				       ? "   [runtime only]" : "");
 		}
 	}
-	fd = map_fd("protected_v6");
-	if (fd >= 0) {
+
+	int fd6 = map_fd("protected_v6");
+	if (fd6 >= 0) {
 		struct prot_v6_key k, next; __u8 v; int first = 1;
 		memset(&k, 0, sizeof(k));
-		while (bpf_map_get_next_key(fd, first ? NULL : &k, &next) == 0) {
+		while (bpf_map_get_next_key(fd6, first ? NULL : &k, &next) == 0) {
 			first = 0; k = next;
-			if (bpf_map_lookup_elem(fd, &k, &v)) continue;
+			if (bpf_map_lookup_elem(fd6, &k, &v)) continue;
 			inet_ntop(AF_INET6, k.addr, ip, sizeof(ip));
-			printf("  protected v6 %s\n", ip);
+			printf("  protected v6 %s%s\n", ip,
+			       (have_cfg && !prot_set_has_v6(cfg, k.addr))
+				       ? "   [runtime only]" : "");
 		}
+	}
+
+	if (!have_cfg)
+		return;
+
+	__u8 v;
+	for (size_t i = 0; i < cfg->n_v4; i++) {
+		if (fd4 < 0 || !bpf_map_lookup_elem(fd4, &cfg->v4[i], &v))
+			continue;
+		inet_ntop(AF_INET, &cfg->v4[i], ip, sizeof(ip));
+		printf("  missing   v4 %s   [in config, removed at runtime]\n", ip);
+	}
+	for (size_t i = 0; i < cfg->n_v6; i++) {
+		if (fd6 < 0 || !bpf_map_lookup_elem(fd6, &cfg->v6[i], &v))
+			continue;
+		inet_ntop(AF_INET6, cfg->v6[i].addr, ip, sizeof(ip));
+		printf("  missing   v6 %s   [in config, removed at runtime]\n", ip);
 	}
 }
 
@@ -286,9 +343,85 @@ static int cmd_list(void)
 {
 	struct clocks c;
 	clocks_now(&c);
-	dump_protected();
+
+	struct prot_set cfg;
+	int have_cfg = load_cfg_quiet(&cfg);
+
+	dump_protected(&cfg, have_cfg);
 	dump_allow_v4(&c);
 	dump_allow_v6(&c);
+
+	if (have_cfg)
+		prot_set_free(&cfg);
+	return 0;
+}
+
+/* Make the live protected maps equal protected.conf. Only the protected maps
+ * are touched - live SPA grants in allow_v4/allow_v6 are left alone, which is
+ * the whole reason this exists instead of a service restart. */
+static int cmd_reload(void)
+{
+	const char *path = prot_conf_path();
+	struct prot_set set;
+
+	if (prot_set_parse(path, &set))
+		return 1;
+	if (prot_set_check_hard(&set)) {
+		prot_set_free(&set);
+		fprintf(stderr, "reload aborted; the live protected set is unchanged\n");
+		return 1;
+	}
+	prot_set_warn_nonlocal(&set);
+
+	int fd4 = map_fd("protected_v4");
+	int fd6 = map_fd("protected_v6");
+	if (fd4 < 0 || fd6 < 0) {
+		prot_set_free(&set);
+		return 1;
+	}
+
+	int added = 0, removed = 0;
+	int err = prot_set_reconcile(fd4, fd6, &set, &added, &removed);
+	size_t n = set.n_v4 + set.n_v6;
+	prot_set_free(&set);
+	if (err)
+		return 1;
+
+	printf("reloaded %s: %zu address%s protected (+%d, -%d)\n",
+	       path, n, n == 1 ? "" : "es", added, removed);
+	return 0;
+}
+
+/* Dump the live protected set in protected.conf format, so a box whose set only
+ * ever existed in the maps can capture it before its next boot needs the file. */
+static int cmd_export(void)
+{
+	int fd4 = map_fd("protected_v4");
+	int fd6 = map_fd("protected_v6");
+	if (fd4 < 0 || fd6 < 0)
+		return 1;
+
+	char ip[INET6_ADDRSTRLEN];
+	printf("# xdpgate protected set, exported from the live maps.\n");
+	printf("# One address per line. '#' starts a comment; CIDR is not accepted.\n");
+
+	__u32 k4, n4; __u8 v; int first = 1; k4 = 0;
+	while (bpf_map_get_next_key(fd4, first ? NULL : &k4, &n4) == 0) {
+		first = 0; k4 = n4;
+		if (bpf_map_lookup_elem(fd4, &k4, &v)) continue;
+		inet_ntop(AF_INET, &k4, ip, sizeof(ip));
+		printf("%s\n", ip);
+	}
+
+	struct prot_v6_key k6, n6;
+	first = 1;
+	memset(&k6, 0, sizeof(k6));
+	while (bpf_map_get_next_key(fd6, first ? NULL : &k6, &n6) == 0) {
+		first = 0; k6 = n6;
+		if (bpf_map_lookup_elem(fd6, &k6, &v)) continue;
+		inet_ntop(AF_INET6, k6.addr, ip, sizeof(ip));
+		printf("%s\n", ip);
+	}
 	return 0;
 }
 
@@ -336,17 +469,22 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 			"usage: %s open  <ip> <tcp|udp> <port> [timeout_secs]\n"
 			"       %s close <ip> <tcp|udp> <port>\n"
-			"       %s add-protected <ip>\n"
-			"       %s del-protected <ip>\n"
+			"       %s add-protected <ip>      (transient - see reload)\n"
+			"       %s del-protected <ip>      (transient - see reload)\n"
+			"       %s reload                  apply %s\n"
+			"       %s export                  dump the live set as config\n"
 			"       %s list\n"
 			"       %s gc\n",
-			argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
+			argv[0], argv[0], argv[0], argv[0], argv[0],
+			prot_conf_path(), argv[0], argv[0], argv[0]);
 		return 2;
 	}
 	if (!strcmp(argv[1], "open"))  return cmd_open_close(argc, argv, 1);
 	if (!strcmp(argv[1], "close")) return cmd_open_close(argc, argv, 0);
 	if (!strcmp(argv[1], "add-protected")) return cmd_protected(argc, argv, 1);
 	if (!strcmp(argv[1], "del-protected")) return cmd_protected(argc, argv, 0);
+	if (!strcmp(argv[1], "reload")) return cmd_reload();
+	if (!strcmp(argv[1], "export")) return cmd_export();
 	if (!strcmp(argv[1], "list")) return cmd_list();
 	if (!strcmp(argv[1], "gc"))   return cmd_gc();
 

@@ -10,7 +10,7 @@ Usage:
     whats-on-ip                 # classify every listener, grouped by reach
     whats-on-ip <ip>            # only sockets reachable on that local IP
     whats-on-ip --self          # one section per non-loopback local IP
-    whats-on-ip --preflight     # warn if a protected IP carries Tailscale/mgmt
+    whats-on-ip --preflight     # fail on an empty or mgmt-overlapping set
 
 Needs `ss` (iproute2). Run with sudo to see process names. --preflight also
 reads the gate's protected set (xdpgate-ctl) and Tailscale's underlay endpoints.
@@ -19,10 +19,13 @@ reads the gate's protected set (xdpgate-ctl) and Tailscale's underlay endpoints.
 import argparse
 import ipaddress
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+
+CONF_PATH = os.environ.get("XDPGATE_CONF") or "/etc/xdpgate/protected.conf"
 
 WILDCARD4 = "0.0.0.0"
 WILDCARD6 = "::"
@@ -214,11 +217,20 @@ def protected_set():
 def cmd_preflight(listeners, strict=False):
     prot, attached = protected_set()
     if not attached:
-        print("gate not attached: protected set is empty, nothing gated yet.")
+        print("gate not attached: nothing is loaded, so there is nothing to")
+        print("check yet. Start it (systemctl start xdpgate) and re-run.")
         return 0
     if not prot:
-        print("gate attached, protected set is empty: nothing gated yet.")
-        return 0
+        # An attached gate with an empty protected set is the worst state this
+        # tool can be asked about: every packet takes the "destination not
+        # protected -> PASS" branch while systemd reports the unit active. It
+        # must never be graded a pass.
+        print("FAIL: the gate is attached but its protected set is EMPTY.")
+        print("  Every packet takes the \"destination not protected -> PASS\"")
+        print("  branch, so the gate is running and gating nothing at all.")
+        print(f"  List the addresses to gate in {CONF_PATH}, then:")
+        print("      systemctl reload xdpgate")
+        return 1
 
     mgmt = management_ips()
     print("Tailscale/management IPs (must NOT be protected):")

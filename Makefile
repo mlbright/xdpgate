@@ -25,11 +25,16 @@ deps:
 xdpgate.bpf.o: xdpgate.bpf.c common.h
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
-xdpgate-load: xdpgate_load.c common.h
-	$(CC) $(USR_CFLAGS) $< -o $@ $(LIBS)
+# The protected set is config-driven; both binaries apply it through the same
+# parse/check/reconcile routines so attach and reload cannot drift apart.
+protected_conf.o: protected_conf.c protected_conf.h common.h
+	$(CC) $(USR_CFLAGS) -c $< -o $@
 
-xdpgate-ctl: xdpgate_ctl.c common.h
-	$(CC) $(USR_CFLAGS) $< -o $@ $(LIBS)
+xdpgate-load: xdpgate_load.c protected_conf.o common.h protected_conf.h
+	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
+
+xdpgate-ctl: xdpgate_ctl.c protected_conf.o common.h protected_conf.h
+	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
 
 # Verify the program loads + passes the verifier without attaching to a NIC.
 verify: xdpgate.bpf.o
@@ -48,15 +53,25 @@ preflight:
 	@./whats-on-ip --preflight
 
 clean:
-	rm -f xdpgate.bpf.o xdpgate-load xdpgate-ctl
+	rm -f xdpgate.bpf.o protected_conf.o xdpgate-load xdpgate-ctl
 
+# Never installs protected.conf itself: an existing protected set is operator
+# data, and a generated one would be a guess at what to gate.
 install: all
-	install -d /usr/local/sbin /usr/local/lib/xdpgate
+	install -d /usr/local/sbin /usr/local/lib/xdpgate /etc/xdpgate
 	install -m 0755 xdpgate-load xdpgate-ctl whats-on-ip /usr/local/sbin/
 	install -m 0644 xdpgate.bpf.o /usr/local/lib/xdpgate/
+	install -m 0644 protected.conf.example /etc/xdpgate/
 	install -m 0644 xdpgate.service xdpgate-gc.service xdpgate-gc.timer \
 		/etc/systemd/system/
-	@echo "Edit IFACE= in /etc/systemd/system/xdpgate.service, then:"
-	@echo "  systemctl daemon-reload && systemctl enable --now xdpgate.service xdpgate-gc.timer"
+	@echo
+	@echo "Next, in order:"
+	@echo "  1. cp /etc/xdpgate/protected.conf.example /etc/xdpgate/protected.conf"
+	@echo "     and list the addresses to gate (upgrading? use: xdpgate-ctl export)"
+	@echo "  2. edit IFACE= in /etc/systemd/system/xdpgate.service"
+	@echo "  3. systemctl daemon-reload"
+	@echo "  4. systemctl enable --now xdpgate.service xdpgate-gc.timer"
+	@echo
+	@echo "The gate refuses to attach without a non-empty protected.conf."
 
 .PHONY: all deps clean verify audit preflight install

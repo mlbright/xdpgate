@@ -1,0 +1,33 @@
+# protected.conf - the set of destination IPs the gate protects.
+#
+# Copy to /etc/xdpgate/protected.conf and list the addresses to gate.
+# This file is the source of truth: xdpgate-load applies it at attach and
+# `systemctl reload xdpgate` applies it to a running gate. Anything in the live
+# maps that this file does not name is removed on reload.
+#
+# Traffic to an address listed here is DROPPED unless a valid SPA has opened the
+# specific (source IP, proto, dest port) tuple. Traffic to any other address is
+# not gated at all.
+#
+# Format: one address per line. '#' starts a comment; blank lines are ignored.
+# CIDR is NOT accepted - the protected maps are exact-match hashes, so give each
+# address its own line. Limit is 256 per family.
+#
+# There is no safe empty default. A gate with nothing in this file passes every
+# packet while reporting itself healthy, so xdpgate-load refuses to attach
+# rather than come up looking armed and doing nothing.
+#
+# DO NOT list an address that carries your management plane. The gate is
+# stateless and ingress-only, so protecting the source address of your default
+# route drops the return path of every connection this host originates - your
+# SSH session included. xdpgate-load refuses to arm that specific mistake; run
+# `whats-on-ip --preflight` to catch the softer ones (Tailscale underlay).
+#
+# Migrating a box whose protected set only ever lived in the kernel maps:
+#     xdpgate-ctl export > /etc/xdpgate/protected.conf
+
+# A service /128 that shares nothing with SSH or the Tailscale underlay:
+2001:db8::1234
+
+# A dedicated IPv4 service address:
+203.0.113.50

@@ -11,7 +11,13 @@ RemainAfterExit=yes
 WorkingDirectory=/usr/local/lib/xdpgate
 # Edit IFACE to your primary ENI (e.g. ens5 on EC2).
 Environment=IFACE=ens5
+# The protected set. xdpgate-load refuses to attach if this is missing or names
+# no addresses - an attached gate with an empty set passes every packet.
+Environment=XDPGATE_CONF=/etc/xdpgate/protected.conf
 ExecStart=/usr/local/sbin/xdpgate-load attach ${IFACE} /usr/local/lib/xdpgate/xdpgate.bpf.o
+# Applies an edited protected.conf in place: live SPA grants survive and XDP
+# never leaves the netdev, unlike a restart.
+ExecReload=/usr/local/sbin/xdpgate-ctl reload
 ExecStop=/usr/local/sbin/xdpgate-load detach ${IFACE}
 
 [Install]
