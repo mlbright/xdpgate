@@ -3,7 +3,8 @@ Description=xdpgate - attach XDP default-deny gate (generic mode)
 Wants=network-online.target
 After=network-online.target sys-fs-bpf.mount
 # Must run before fwknopd so the maps exist when the first SPA arrives.
-Before=fwknop.service
+# fwknop.service is the C fwknopd unit; fwknopd.service is fwknop-go's.
+Before=fwknop.service fwknopd.service
 
 [Service]
 Type=oneshot
