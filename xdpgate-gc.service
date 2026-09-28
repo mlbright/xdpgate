@@ -1,5 +1,5 @@
 [Unit]
-Description=xdpgate - reap expired allow entries (missed-close backstop)
+Description=xdpgate - reap expired grants (missed-close backstop)
 After=xdpgate.service
 Requires=xdpgate.service
 
