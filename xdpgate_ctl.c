@@ -53,6 +53,26 @@ static __u64 monotonic_ns(void)
 	return (__u64)ts.tv_sec * 1000000000ULL + (__u64)ts.tv_nsec;
 }
 
+/* Parse a whole decimal string into [min, max]. Unlike atoi/atol this rejects
+ * trailing junk ("22x"), signs, empty strings and values that overflow. */
+static int parse_ulong(const char *s, unsigned long min, unsigned long max,
+		       unsigned long *out)
+{
+	if (*s < '0' || *s > '9')
+		return -1;
+	errno = 0;
+	char *end;
+	unsigned long v = strtoul(s, &end, 10);
+	if (errno || *end != '\0' || v < min || v > max)
+		return -1;
+	*out = v;
+	return 0;
+}
+
+/* Upper bound for a grant, chosen only so the nanosecond expiry cannot wrap
+ * a __u64 (which would give an already-expired or never-expiring entry). */
+#define MAX_TIMEOUT_SECS (100UL * 365 * 24 * 3600)
+
 static int parse_proto(const char *s, __u8 *out)
 {
 	if (!strcasecmp(s, "tcp")) { *out = IPPROTO_TCP; return 0; }
@@ -92,17 +112,23 @@ static int cmd_open_close(int argc, char **argv, int opening)
 	__u8 proto;
 	if (parse_proto(argv[3], &proto)) return 2;
 
-	int port = atoi(argv[4]);
-	if (port < 1 || port > 65535) {
-		fprintf(stderr, "port out of range: %s\n", argv[4]);
+	unsigned long port;
+	if (parse_ulong(argv[4], 1, 65535, &port)) {
+		fprintf(stderr, "port must be 1-65535, got '%s'\n", argv[4]);
 		return 2;
 	}
 	__u16 dport_be = htons((__u16)port);
 
 	__u64 expiry = 0;
 	if (opening) {
-		long t = (argc == 6) ? atol(argv[5]) : DEFAULT_TIMEOUT_SECS;
-		if (t <= 0) t = DEFAULT_TIMEOUT_SECS;
+		unsigned long t = 0;   /* 0 = use the default, as before */
+		if (argc == 6 && parse_ulong(argv[5], 0, MAX_TIMEOUT_SECS, &t)) {
+			fprintf(stderr, "timeout must be 0-%lu seconds, got '%s'\n",
+				MAX_TIMEOUT_SECS, argv[5]);
+			return 2;
+		}
+		if (t == 0)
+			t = DEFAULT_TIMEOUT_SECS;
 		expiry = monotonic_ns() + (__u64)t * 1000000000ULL;
 	}
 
