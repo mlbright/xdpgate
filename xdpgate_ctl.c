@@ -212,10 +212,11 @@ static void fmt_duration(long long secs, char *buf, size_t len)
 	snprintf(buf + n, len - n, "%llds", secs);
 }
 
+/* The tail of a grant line: "expires <when> (in <dur>)" or a variant. */
 static void print_expiry(__u64 expiry_ns, const struct clocks *c)
 {
 	if (!expiry_ns) {
-		printf("        no expiry\n");
+		printf("no expiry\n");
 		return;
 	}
 
@@ -231,47 +232,116 @@ static void print_expiry(__u64 expiry_ns, const struct clocks *c)
 
 	fmt_duration(left < 0 ? -left : left, dbuf, sizeof(dbuf));
 	if (left < 0)
-		printf("        expired %s (%s ago)\n", tbuf, dbuf);
+		printf("expired %s (%s ago)\n", tbuf, dbuf);
 	else
-		printf("        expires %s (in %s)\n", tbuf, dbuf);
+		printf("expires %s (in %s)\n", tbuf, dbuf);
+}
+
+/* Listing sort orders. Addresses compare as numbers: v4 after ntohl, v6
+ * bytewise, since network order is big-endian and so memcmp is numeric. */
+static int cmp_u32(__u32 a, __u32 b)
+{
+	return a < b ? -1 : a > b;
+}
+
+static int cmp_prot_v4(const void *a, const void *b)
+{
+	return cmp_u32(ntohl(*(const __u32 *)a), ntohl(*(const __u32 *)b));
+}
+
+static int cmp_prot_v6(const void *a, const void *b)
+{
+	return memcmp(a, b, sizeof(struct prot_v6_key));
+}
+
+/* Grants from one source address: tcp before udp, then by port. */
+static int cmp_svc(__u8 pa, __u16 da, __u8 pb, __u16 db)
+{
+	return pa != pb ? cmp_u32(pa, pb) : cmp_u32(ntohs(da), ntohs(db));
+}
+
+static int cmp_allow_v4(const void *a, const void *b)
+{
+	const struct allow_v4_key *x = a, *y = b;
+	int c = cmp_u32(ntohl(x->saddr), ntohl(y->saddr));
+	return c ? c : cmp_svc(x->proto, x->dport, y->proto, y->dport);
+}
+
+static int cmp_allow_v6(const void *a, const void *b)
+{
+	const struct allow_v6_key *x = a, *y = b;
+	int c = memcmp(x->saddr, y->saddr, 16);
+	return c ? c : cmp_svc(x->proto, x->dport, y->proto, y->dport);
+}
+
+/* Every key of a hash map, sorted with cmp: iteration runs in hash order,
+ * which reads as random. Returns the count; *out is malloc'd for the caller
+ * to free. */
+static size_t map_sorted_keys(int fd, size_t ksz,
+			      int (*cmp)(const void *, const void *), void **out)
+{
+	unsigned char *keys = NULL;
+	size_t n = 0, cap = 0;
+
+	for (;;) {
+		if (n == cap) {
+			size_t ncap = cap ? cap * 2 : 64;
+			unsigned char *p = realloc(keys, ncap * ksz);
+			if (!p) {
+				fprintf(stderr, "out of memory; listing is incomplete\n");
+				break;
+			}
+			keys = p;
+			cap = ncap;
+		}
+		/* Each key is the cursor for the next, so iterate in place. */
+		if (bpf_map_get_next_key(fd, n ? keys + (n - 1) * ksz : NULL,
+					 keys + n * ksz))
+			break;
+		n++;
+	}
+	if (n)
+		qsort(keys, n, ksz, cmp);
+	*out = keys;
+	return n;
 }
 
 static void dump_allow_v4(const struct clocks *c)
 {
 	int fd = map_fd("allow_v4");
 	if (fd < 0) return;
-	struct allow_v4_key k, next;
+	struct allow_v4_key *keys;
 	struct allow_val v;
 	char ip[INET_ADDRSTRLEN];
-	int first = 1;
-	memset(&k, 0, sizeof(k));
-	while (bpf_map_get_next_key(fd, first ? NULL : &k, &next) == 0) {
-		first = 0; k = next;
-		if (bpf_map_lookup_elem(fd, &k, &v)) continue;
-		inet_ntop(AF_INET, &k.saddr, ip, sizeof(ip));
-		printf("  v4 %-15s %s/%-5u\n", ip, proto_str(k.proto),
-		       ntohs(k.dport));
+	size_t n = map_sorted_keys(fd, sizeof(*keys), cmp_allow_v4,
+				   (void **)&keys);
+	for (size_t i = 0; i < n; i++) {
+		if (bpf_map_lookup_elem(fd, &keys[i], &v)) continue;
+		inet_ntop(AF_INET, &keys[i].saddr, ip, sizeof(ip));
+		printf("v4 %s:%s/%u ", ip, proto_str(keys[i].proto),
+		       ntohs(keys[i].dport));
 		print_expiry(v.expiry_ns, c);
 	}
+	free(keys);
 }
 
 static void dump_allow_v6(const struct clocks *c)
 {
 	int fd = map_fd("allow_v6");
 	if (fd < 0) return;
-	struct allow_v6_key k, next;
+	struct allow_v6_key *keys;
 	struct allow_val v;
 	char ip[INET6_ADDRSTRLEN];
-	int first = 1;
-	memset(&k, 0, sizeof(k));
-	while (bpf_map_get_next_key(fd, first ? NULL : &k, &next) == 0) {
-		first = 0; k = next;
-		if (bpf_map_lookup_elem(fd, &k, &v)) continue;
-		inet_ntop(AF_INET6, k.saddr, ip, sizeof(ip));
-		printf("  v6 [%s]:%s/%u\n", ip, proto_str(k.proto),
-		       ntohs(k.dport));
+	size_t n = map_sorted_keys(fd, sizeof(*keys), cmp_allow_v6,
+				   (void **)&keys);
+	for (size_t i = 0; i < n; i++) {
+		if (bpf_map_lookup_elem(fd, &keys[i], &v)) continue;
+		inet_ntop(AF_INET6, keys[i].saddr, ip, sizeof(ip));
+		printf("v6 [%s]:%s/%u ", ip, proto_str(keys[i].proto),
+		       ntohs(keys[i].dport));
 		print_expiry(v.expiry_ns, c);
 	}
+	free(keys);
 }
 
 /* Best-effort config load, for annotating `list` only. A box that has not been
@@ -289,53 +359,61 @@ static int load_cfg_quiet(struct prot_set *out)
 /* Live protected entries, tagged with where they came from. Entries that are
  * in the config but NOT in the map print on a differently-prefixed line, so
  * tools scraping "^\s*protected v[46] <ip>" only ever see addresses that are
- * genuinely being gated right now. */
-static void dump_protected(const struct prot_set *cfg, int have_cfg)
+ * genuinely being gated right now. Sorts cfg in place. */
+static void dump_protected(struct prot_set *cfg, int have_cfg)
 {
 	char ip[INET6_ADDRSTRLEN];
+	__u8 v;
 
 	int fd4 = map_fd("protected_v4");
 	if (fd4 >= 0) {
-		__u32 k, next; __u8 v; int first = 1; k = 0;
-		while (bpf_map_get_next_key(fd4, first ? NULL : &k, &next) == 0) {
-			first = 0; k = next;
-			if (bpf_map_lookup_elem(fd4, &k, &v)) continue;
-			inet_ntop(AF_INET, &k, ip, sizeof(ip));
-			printf("  protected v4 %s%s\n", ip,
-			       (have_cfg && !prot_set_has_v4(cfg, k))
+		__u32 *keys;
+		size_t n = map_sorted_keys(fd4, sizeof(*keys), cmp_prot_v4,
+					   (void **)&keys);
+		for (size_t i = 0; i < n; i++) {
+			if (bpf_map_lookup_elem(fd4, &keys[i], &v)) continue;
+			inet_ntop(AF_INET, &keys[i], ip, sizeof(ip));
+			printf("protected v4 %s%s\n", ip,
+			       (have_cfg && !prot_set_has_v4(cfg, keys[i]))
 				       ? "   [runtime only]" : "");
 		}
+		free(keys);
 	}
 
 	int fd6 = map_fd("protected_v6");
 	if (fd6 >= 0) {
-		struct prot_v6_key k, next; __u8 v; int first = 1;
-		memset(&k, 0, sizeof(k));
-		while (bpf_map_get_next_key(fd6, first ? NULL : &k, &next) == 0) {
-			first = 0; k = next;
-			if (bpf_map_lookup_elem(fd6, &k, &v)) continue;
-			inet_ntop(AF_INET6, k.addr, ip, sizeof(ip));
-			printf("  protected v6 %s%s\n", ip,
-			       (have_cfg && !prot_set_has_v6(cfg, k.addr))
+		struct prot_v6_key *keys;
+		size_t n = map_sorted_keys(fd6, sizeof(*keys), cmp_prot_v6,
+					   (void **)&keys);
+		for (size_t i = 0; i < n; i++) {
+			if (bpf_map_lookup_elem(fd6, &keys[i], &v)) continue;
+			inet_ntop(AF_INET6, keys[i].addr, ip, sizeof(ip));
+			printf("protected v6 %s%s\n", ip,
+			       (have_cfg && !prot_set_has_v6(cfg, keys[i].addr))
 				       ? "   [runtime only]" : "");
 		}
+		free(keys);
 	}
 
 	if (!have_cfg)
 		return;
 
-	__u8 v;
+	if (cfg->n_v4)
+		qsort(cfg->v4, cfg->n_v4, sizeof(*cfg->v4), cmp_prot_v4);
+	if (cfg->n_v6)
+		qsort(cfg->v6, cfg->n_v6, sizeof(*cfg->v6), cmp_prot_v6);
+
 	for (size_t i = 0; i < cfg->n_v4; i++) {
 		if (fd4 < 0 || !bpf_map_lookup_elem(fd4, &cfg->v4[i], &v))
 			continue;
 		inet_ntop(AF_INET, &cfg->v4[i], ip, sizeof(ip));
-		printf("  missing   v4 %s   [in config, removed at runtime]\n", ip);
+		printf("missing   v4 %s   [in config, removed at runtime]\n", ip);
 	}
 	for (size_t i = 0; i < cfg->n_v6; i++) {
 		if (fd6 < 0 || !bpf_map_lookup_elem(fd6, &cfg->v6[i], &v))
 			continue;
 		inet_ntop(AF_INET6, cfg->v6[i].addr, ip, sizeof(ip));
-		printf("  missing   v6 %s   [in config, removed at runtime]\n", ip);
+		printf("missing   v6 %s   [in config, removed at runtime]\n", ip);
 	}
 }
 
