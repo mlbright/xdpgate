@@ -20,7 +20,7 @@
 #define XDPGATE_CONF_DEFAULT "/etc/xdpgate/protected.conf"
 #define XDPGATE_CONF_ENV     "XDPGATE_CONF"
 
-/* Must match max_entries on protected_v4/protected_v6 in xdpgate.bpf.c. */
+/* Must match protected_max_entries in src/layout.zig. */
 #define PROT_MAX_ENTRIES 256
 
 /* Parsed contents of protected.conf. Addresses are stored in network byte
