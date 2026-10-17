@@ -1,0 +1,5 @@
+libbpf: couldn't reuse pinned map at '/sys/fs/bpf/xdpgate/protected_v4': parameter mismatch
+libbpf: map 'protected_v4': error reusing pinned map
+libbpf: map 'protected_v4': failed to create: Invalid argument(-22)
+libbpf: failed to load object 'xdpgate.bpf.o'
+load failed: Invalid argument

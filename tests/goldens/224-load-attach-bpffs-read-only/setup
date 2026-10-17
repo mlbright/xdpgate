@@ -1,0 +1,1 @@
+mount -t tmpfs -o ro tmpfs /sys/fs/bpf

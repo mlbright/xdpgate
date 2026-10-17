@@ -1,0 +1,28 @@
+xdp gate0: generic xdpgate
+pins: allow_v4 allow_v6 protected_v4 protected_v6
+map allow_v4: hash key 7 value 8 max_entries 4096 flags 0x0
+  (16 entries)
+  198.51.100.1 tcp 22 = +1s
+  198.51.100.2 tcp 22 = +2s
+  198.51.100.3 tcp 22 = +60s
+  198.51.100.4 tcp 22 = +61s
+  198.51.100.5 tcp 22 = +3600s
+  198.51.100.6 tcp 22 = +3601s
+  198.51.100.7 tcp 22 = +86400s
+  198.51.100.8 tcp 22 = +86401s
+  198.51.100.9 tcp 22 = +90062s
+  198.51.100.10 tcp 22 = +3153600000s
+  198.51.100.11 tcp 22 = never
+  198.51.100.12 tcp 22 = expired
+  198.51.100.13 tcp 22 = expired
+  198.51.100.14 tcp 22 = expired
+  198.51.100.15 tcp 22 = expired
+  198.51.100.16 tcp 22 = expired
+map allow_v6: hash key 19 value 8 max_entries 4096 flags 0x0
+  (0 entries)
+map protected_v4: hash key 4 value 1 max_entries 256 flags 0x0
+  (1 entries)
+  192.0.2.10 = 01
+map protected_v6: hash key 16 value 1 max_entries 256 flags 0x0
+  (1 entries)
+  2001:db8:1::10 = 01

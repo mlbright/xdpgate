@@ -1,0 +1,2 @@
+attach
+bpftool map create /sys/fs/bpf/xdpgate/other type hash key 4 value 4 entries 4 name other

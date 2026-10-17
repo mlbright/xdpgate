@@ -1,0 +1,14 @@
+protected v4 192.0.2.10
+protected v6 2001:db8:1::10
+v4 9.255.255.255:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v4 10.0.0.9:tcp/443 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v4 10.0.0.9:tcp/1000 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v4 10.0.0.9:tcp/8080 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v4 10.0.0.9:udp/53 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v4 10.0.0.10:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v4 198.51.100.7:udp/62159 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v6 [::1]:tcp/1 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v6 [::ffff:10.0.0.9]:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v6 [2001:db8:2::9]:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v6 [2001:db8:2::9]:udp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v6 [2001:db8:2::10]:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)

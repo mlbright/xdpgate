@@ -1,0 +1,7 @@
+attach
+unprotect 192.0.2.9
+unprotect 10.0.0.1
+unprotect ff02::1
+unprotect ::1
+protect 192.0.2.99
+protect 2001:db8::99

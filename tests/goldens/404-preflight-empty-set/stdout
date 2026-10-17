@@ -1,0 +1,5 @@
+FAIL: the gate is attached but its protected set is EMPTY.
+  Every packet takes the "destination not protected -> PASS"
+  branch, so the gate is running and gating nothing at all.
+  List the addresses to gate in /etc/xdpgate/protected.conf, then:
+      systemctl reload xdpgate

@@ -1,0 +1,11 @@
+Tailscale/management IPs (must NOT be protected):
+  [HARD] 192.0.2.1  -- default v4 source (stateless return path)
+  [HARD] 2001:db8:1::1  -- default v6 source (stateless return path)
+
+protected 192.0.2.10
+  (nothing reachable on 192.0.2.10)
+
+protected 2001:db8:1::10
+  (nothing reachable on 2001:db8:1::10)
+
+OK: no protected IP overlaps a Tailscale underlay / management address.

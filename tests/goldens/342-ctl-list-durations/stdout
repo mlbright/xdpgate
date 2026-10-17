@@ -1,0 +1,18 @@
+protected v4 192.0.2.10
+protected v6 2001:db8:1::10
+v4 198.51.100.1:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 0s)
+v4 198.51.100.2:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 1s)
+v4 198.51.100.3:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 59s)
+v4 198.51.100.4:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 1m 0s)
+v4 198.51.100.5:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 59m 59s)
+v4 198.51.100.6:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 1h 0m 0s)
+v4 198.51.100.7:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 23h 59m 59s)
+v4 198.51.100.8:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 1d 0h 0m 0s)
+v4 198.51.100.9:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 1d 1h 1m 1s)
+v4 198.51.100.10:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 36499d 23h 59m 59s)
+v4 198.51.100.11:tcp/22 no expiry
+v4 198.51.100.12:tcp/22 expires YYYY-MM-DD hh:mm:ss UTC (in 0s)
+v4 198.51.100.13:tcp/22 expired YYYY-MM-DD hh:mm:ss UTC (1s ago)
+v4 198.51.100.14:tcp/22 expired YYYY-MM-DD hh:mm:ss UTC (1m 0s ago)
+v4 198.51.100.15:tcp/22 expired YYYY-MM-DD hh:mm:ss UTC (1h 0m 0s ago)
+v4 198.51.100.16:tcp/22 expired YYYY-MM-DD hh:mm:ss UTC (1d 1h 1m 1s ago)

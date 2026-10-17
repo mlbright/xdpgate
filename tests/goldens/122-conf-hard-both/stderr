@@ -1,0 +1,11 @@
+refusing to apply: 192.0.2.1 is this host's default IPv4 source address.
+  The gate is stateless and ingress-only, so protecting it drops the
+  return path of every connection this host originates - including
+  the session you are reading this in.
+  Move the service to a dedicated address and put that in the config.
+refusing to apply: 2001:db8:1::1 is this host's default IPv6 source address.
+  The gate is stateless and ingress-only, so protecting it drops the
+  return path of every connection this host originates - including
+  the session you are reading this in.
+  Move the service to a dedicated address and put that in the config.
+reload aborted; the live protected set is unchanged

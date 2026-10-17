@@ -1,0 +1,8 @@
+usage: xdpgate-ctl open  <ip> <tcp|udp> <port> [timeout_secs]
+       xdpgate-ctl close <ip> <tcp|udp> <port>
+       xdpgate-ctl add-protected <ip>      (transient - see reload)
+       xdpgate-ctl del-protected <ip>      (transient - see reload)
+       xdpgate-ctl reload                  apply /etc/xdpgate/protected.conf
+       xdpgate-ctl export                  dump the live set as config
+       xdpgate-ctl list
+       xdpgate-ctl gc

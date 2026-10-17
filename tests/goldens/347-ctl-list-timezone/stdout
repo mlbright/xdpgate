@@ -1,0 +1,4 @@
+protected v4 192.0.2.10
+protected v6 2001:db8:1::10
+v4 198.51.100.7:tcp/22 expires YYYY-MM-DD hh:mm:ss JST (in 59m 59s)
+v4 198.51.100.8:tcp/22 expired YYYY-MM-DD hh:mm:ss JST (1h 0m 0s ago)

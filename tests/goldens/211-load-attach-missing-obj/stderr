@@ -1,0 +1,2 @@
+libbpf: elf: failed to open /nonexistent/xdpgate.bpf.o: No such file or directory
+open /nonexistent/xdpgate.bpf.o failed: No such file or directory

@@ -1,0 +1,2 @@
+/etc/xdpgate/protected.conf:2: warning: duplicate address '192.0.2.10', ignoring
+/etc/xdpgate/protected.conf:4: bad IPv4 address 'bogus'

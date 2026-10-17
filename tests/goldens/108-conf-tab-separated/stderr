@@ -1,0 +1,1 @@
+/etc/xdpgate/protected.conf:1: expected one address per line, got '192.0.2.10	192.0.2.11'

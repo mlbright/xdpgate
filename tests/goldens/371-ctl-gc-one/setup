@@ -1,0 +1,5 @@
+attach
+grants <<'EOF'
+v4 198.51.100.7 tcp 22 -60
+v4 198.51.100.8 tcp 22 +3600
+EOF

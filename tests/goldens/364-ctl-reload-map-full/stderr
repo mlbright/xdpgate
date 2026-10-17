@@ -1,0 +1,2 @@
+protected_v4: cannot protect 192.0.2.11: Argument list too long
+  the map is full (max_entries 256); raise it in xdpgate.bpf.c and rebuild.

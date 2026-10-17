@@ -1,0 +1,1 @@
+xdpgate-ctl del-protected 2001:db8:1::10

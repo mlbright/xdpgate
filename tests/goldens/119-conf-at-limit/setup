@@ -1,0 +1,5 @@
+attach
+{
+  for i in $(seq 0 255); do echo 198.18.$((i >> 8)).$((i & 255)); done
+  for i in $(seq 0 255); do printf '2001:db8:5::%x\n' $i; done
+} >/etc/xdpgate/protected.conf

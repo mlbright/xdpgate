@@ -1,0 +1,1 @@
+XDPGATE_CONF=/etc/xdpgate/other.conf xdpgate-load attach gate0

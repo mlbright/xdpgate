@@ -1,0 +1,4 @@
+# xdpgate protected set, exported from the live maps.
+# One address per line. '#' starts a comment; CIDR is not accepted.
+192.0.2.10
+2001:db8:1::10

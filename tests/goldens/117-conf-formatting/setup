@@ -1,0 +1,2 @@
+attach
+printf '\t192.0.2.10  \r\n# comment\r\n\r\n  2001:db8:1::10\t# svc\n192.0.2.11#tight\n' >/etc/xdpgate/protected.conf
