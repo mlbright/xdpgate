@@ -1,7 +1,6 @@
-# build artifacts
-xdpgate.bpf.o
-xdpgate-load
-xdpgate-ctl
+# build output
+zig-out/
+.zig-cache/
 # Prerequisites
 *.d
 

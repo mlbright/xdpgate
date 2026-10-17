@@ -1,0 +1,7 @@
+.{
+    .name = .xdpgate,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.17.0",
+    .paths = .{""},
+    .fingerprint = 0xb133ab39501f36ef,
+}

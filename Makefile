@@ -1,44 +1,29 @@
-# xdpgate Makefile
+# xdpgate Makefile - a thin wrapper over `zig build`.
 # Development platform: Ubuntu 24.04 LTS (Noble Numbat).
-# Install the build toolchain with `make deps` (or see the package list below).
-CLANG    ?= clang
-CC       ?= cc
-ARCH     := $(shell uname -m | sed 's/x86_64/x86/;s/aarch64/arm64/')
-MULTIARCH := $(shell uname -m)-linux-gnu
+# Building needs Zig 0.17.0 on PATH (https://ziglang.org/download/).
+#
+# Build as yourself, install as root: `make && sudo make install`. Installing
+# never builds, so root does not need Zig on its PATH.
+ZIG ?= zig
+OUT := zig-out
+ARTIFACTS := $(OUT)/bin/xdpgate-load $(OUT)/bin/xdpgate-ctl $(OUT)/lib/xdpgate.bpf.o
 
-# Core build dependencies (apt package names on Ubuntu 24.04 LTS).
-# The optional `verify` target also needs bpftool, which ships in the
-# kernel tooling: apt-get install linux-tools-$(shell uname -r)
-APT_DEPS := clang llvm libbpf-dev libelf-dev make
+all:
+	$(ZIG) build
 
-BPF_CFLAGS := -O2 -g -Wall -target bpf -D__TARGET_ARCH_$(ARCH) -I/usr/include/$(MULTIARCH)
-USR_CFLAGS := -O2 -g -Wall
-LIBS       := -lbpf
+# Unit tests, then the golden-transcript and netns traffic suites (tests/),
+# which run in throwaway namespaces and ask sudo for them.
+check: all
+	$(ZIG) build test
+	sudo tests/goldens.sh $(OUT)
+	sudo tests/traffic.sh $(OUT)
 
-all: xdpgate.bpf.o xdpgate-load xdpgate-ctl
-
-# Install the core build dependencies (Ubuntu 24.04 LTS).
-deps:
-	sudo apt-get update
-	sudo apt-get install -y $(APT_DEPS)
-
-xdpgate.bpf.o: xdpgate.bpf.c common.h
-	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
-
-# The protected set is config-driven; both binaries apply it through the same
-# parse/check/reconcile routines so attach and reload cannot drift apart.
-protected_conf.o: protected_conf.c protected_conf.h common.h
-	$(CC) $(USR_CFLAGS) -c $< -o $@
-
-xdpgate-load: xdpgate_load.c protected_conf.o common.h protected_conf.h
-	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
-
-xdpgate-ctl: xdpgate_ctl.c protected_conf.o common.h protected_conf.h
-	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
+$(ARTIFACTS):
+	@echo "$@ is missing: run 'make' first, as yourself" >&2; exit 1
 
 # Verify the program loads + passes the verifier without attaching to a NIC.
-verify: xdpgate.bpf.o
-	bpftool prog load xdpgate.bpf.o /sys/fs/bpf/xdpgate_verify_test \
+verify: $(OUT)/lib/xdpgate.bpf.o
+	bpftool prog load $< /sys/fs/bpf/xdpgate_verify_test \
 		type xdp && bpftool prog | tail -3 && \
 		rm -f /sys/fs/bpf/xdpgate_verify_test
 
@@ -53,14 +38,18 @@ preflight:
 	@./whats-on-ip --preflight
 
 clean:
-	rm -f xdpgate.bpf.o protected_conf.o xdpgate-load xdpgate-ctl
+	rm -rf $(OUT) .zig-cache
 
+# Installs what `make` built, after the netns traffic test has passed on those
+# exact files on this kernel: a build that does not gate correctly is never
+# installed.
 # Never installs protected.conf itself: an existing protected set is operator
 # data, and a generated one would be a guess at what to gate.
-install: all
+install: $(ARTIFACTS)
+	tests/traffic.sh $(OUT)
 	install -d /usr/local/sbin /usr/local/lib/xdpgate /etc/xdpgate
-	install -m 0755 xdpgate-load xdpgate-ctl whats-on-ip /usr/local/sbin/
-	install -m 0644 xdpgate.bpf.o /usr/local/lib/xdpgate/
+	install -m 0755 $(OUT)/bin/xdpgate-load $(OUT)/bin/xdpgate-ctl whats-on-ip /usr/local/sbin/
+	install -m 0644 $(OUT)/lib/xdpgate.bpf.o /usr/local/lib/xdpgate/
 	install -m 0644 protected.conf.example /etc/xdpgate/
 	install -m 0644 xdpgate.service xdpgate-gc.service xdpgate-gc.timer \
 		/etc/systemd/system/
@@ -74,4 +63,4 @@ install: all
 	@echo
 	@echo "The gate refuses to attach without a non-empty protected.conf."
 
-.PHONY: all deps clean verify audit preflight install
+.PHONY: all check clean verify audit preflight install
