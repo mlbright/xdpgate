@@ -23,17 +23,25 @@ inbound packet
 
 ## Components
 
-- `xdpgate.bpf.c` — the XDP program (verifier-clean on kernel 6.8).
-- `xdpgate-load` — loads the object, attaches XDP in **generic/SKB mode**, pins
-  the four maps under `/sys/fs/bpf/xdpgate`. Run once at boot.
-- `protected_conf.c` — parses `protected.conf`, refuses configurations that
+The XDP program and both CLIs are written in Zig 0.17.0.
+
+- `src/bpf/xdpgate.zig` — the XDP program (verifier-clean on kernel 7.0). Zig
+  cannot yet emit a BPF object libbpf will load as-is, so `tools/bpf_fixup.zig`
+  repairs it after every build and refuses anything it does not recognise; see
+  `docs/adr/0001-xdp-program-in-zig-with-object-fixup.md`.
+- `src/layout.zig` — the four pinned maps and their key layouts, shared by the
+  program and the CLIs.
+- `xdpgate-load` (`src/load.zig`) — loads the object, attaches XDP in
+  **generic/SKB mode**, pins the four maps under `/sys/fs/bpf/xdpgate`. Run once
+  at boot.
+- `src/declared_set.zig` — parses `protected.conf`, refuses configurations that
   would cut the host off, and reconciles the live maps to the file. Compiled
   into **both** binaries so attach and reload cannot drift apart.
-- `xdpgate-ctl` — per-SPA map editor + operator tooling
+- `xdpgate-ctl` (`src/ctl.zig`) — per-SPA map editor + operator tooling
   (`open`/`close`/`reload`/`export`/`add-protected`/`del-protected`/`list`/`gc`).
-- `whats-on-ip` — audit helper. Lists which listening sockets are actually
-  reachable on a given local IP (wildcard binds answer on *every* address, so
-  "nothing bound specifically to X" ≠ "nothing listening on X"). Its
+- `whats-on-ip` — audit helper, in Python. Lists which listening sockets are
+  actually reachable on a given local IP (wildcard binds answer on *every*
+  address, so "nothing bound specifically to X" ≠ "nothing listening on X"). Its
   `--preflight` mode grades each protected IP's overlap with the management
   plane as HARD (default-route source — fails) or SOFT (candidate Tailscale
   endpoint — warns; `--strict` fails). Used by `make audit` / `make preflight`.
@@ -41,16 +49,44 @@ inbound packet
 
 ## Build & install
 
-Developed and tested on **Ubuntu 24.04 LTS (Noble Numbat)**.
+Developed and tested on **Ubuntu 24.04 LTS (Noble Numbat)** on x86_64; the build
+also targets aarch64 natively, untested. Building needs
+[Zig 0.17.0](https://ziglang.org/download/) on your `PATH` and nothing else.
+The CLIs link glibc and the system's `libbpf.so.1` (package `libbpf1`, which
+`iproute2` already depends on).
 
 ```sh
-make deps               # installs clang llvm libbpf-dev libelf-dev make (via apt)
-make
-make install            # /usr/local/sbin + /usr/local/lib/xdpgate + units
+make                    # as yourself: zig build, into zig-out/
+sudo make install       # /usr/local/sbin + /usr/local/lib/xdpgate + units
 ```
 
-The optional `make verify` target additionally needs `bpftool`, which ships in
-the kernel tooling: `apt-get install linux-tools-$(uname -r)`.
+`make install` never builds, so root needs no Zig. Before copying anything it
+runs the traffic test below against those exact files on the running kernel,
+and refuses to install a build that does not gate correctly.
+
+The optional `make verify` target and the golden tests need `bpftool`, which
+ships in the kernel tooling: `apt-get install linux-tools-$(uname -r)`.
+
+### Tests
+
+```sh
+make check              # unit tests, then the golden and traffic suites
+```
+
+- `zig build test` — unit tests: config parsing, reconcile planning, listing
+  order and durations, and the fix-up pass refusing a broken object.
+- `tests/goldens.sh` — 147 transcripts recorded from the original C build
+  (output, exit code and the maps left behind), which every build must
+  reproduce byte for byte. The few deliberate differences, with their reasons,
+  are in `tests/goldens/deviations.sed`.
+- `tests/traffic.sh` — attaches the build to a veth pair and sends real
+  traffic: drop, pass, the SPA carve-out, grants, expiry, reload and detach,
+  over IPv4 and IPv6.
+
+Both suites run under sudo, which `make check` asks for, inside throwaway
+namespaces with their own bpffs, so a gate running on the host is never
+touched. `tests/rerecord.sh` records new goldens by rebuilding the original C
+from git, which needs libbpf's headers: `apt-get install libbpf-dev`.
 
 ## The protected set is a config file
 
@@ -160,19 +196,27 @@ grant. The GC timer only reclaims map slots after the fact. Keep the
 
 - **Key is `(src, proto, dport)`, not destination-scoped.** An SPA for
   `tcp/443` from X opens `tcp/443` from X to *any* protected IP. To scope per
-  destination, add `$DST` to `xdpgate-ctl open`, add a `daddr` field to
-  `allow_*_key` in `common.h`, and set it in the XDP lookup. One-field change
-  on each side.
+  destination, add `$DST` to `xdpgate-ctl open` (`src/ctl.zig`), add a `daddr`
+  field to `GrantKey4`/`GrantKey6` in `src/layout.zig`, and set it in the XDP
+  lookup (`src/bpf/xdpgate.zig`). One-field change on each side, but it changes
+  the pinned maps: detach the running gate, which removes its pins, before
+  attaching the new build.
+- **`del-protected` can empty the protected set of a running gate.** Attaching
+  and `reload` refuse an empty set, but deleting the last address at runtime
+  succeeds with only the usual runtime-override warning, and the gate then
+  passes everything while still attached. `whats-on-ip --preflight` fails on
+  it. A fix would refuse the last deletion unless forced.
 - **Multi-port SPA opens only the first port** (mrash/fwknop#327). Use one port
   per SPA, or extend the value to a port set.
 - **`$SRC` vs `$PKT_SRC`.** We key on `$SRC` (the IP fwknop authorises, which is
   what subsequent connections use). If clients are behind NAT and the connecting
   IP differs from the SPA-embedded IP, switch the access.conf token or have
   clients use `-R`/resolve-ip.
-- **ICMP / PMTUD.** With `ALLOW_ICMP_TO_PROTECTED=0` (default, strict), ICMP and
-  ICMPv6 to protected IPs are dropped — this blackholes Path MTU Discovery
+- **ICMP / PMTUD.** With `allow_icmp_to_protected = false` (default, strict), ICMP
+  and ICMPv6 to protected IPs are dropped — this blackholes Path MTU Discovery
   ("frag needed" / "packet too big") to those services. IPv6 NDP is link-local
-  and unaffected. Flip the flag in `common.h` and rebuild if PMTUD matters.
+  and unaffected. Flip the flag in `src/layout.zig` and rebuild if PMTUD
+  matters.
 - **Fragments.** Non-first IPv4 fragments (no L4 header) to a protected dest are
   dropped; the first fragment must carry the real port to match. Fine for
   TCP-with-PMTUD services; relevant if you gate something that fragments.
@@ -180,7 +224,8 @@ grant. The GC timer only reclaims map slots after the fact. Keep the
   parsed; packets with ext headers to a protected dest hit the no-L4 path and
   are dropped (fail-closed). Add a header walk if you need them.
 - **`--rand-port` SPAs** break the single UDP/62159 carve-out. Widen the
-  `SPA_PORT` check to a range in `xdpgate.bpf.c` if you use random SPA ports.
+  `spa_port` check in `src/bpf/xdpgate.zig` to a range if you use random SPA
+  ports.
 - **Generic mode** runs after GRO and is slower than native `ena` XDP, but it's
   the right call for portability and for not perturbing the data path. Moving to
   native later is just an attach-flag change.
