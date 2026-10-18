@@ -6,8 +6,9 @@
 #
 # The goldens describe what the original C did, so they are always recorded
 # from C: HEAD while it still has the C, and afterwards the last commit that
-# had all of it. Review the result with `git diff`: a change to an existing
-# golden means the C does something other than what was recorded before.
+# had all of it. Recording applies goldens/deviations.sed on top. Review the
+# result with `git diff`: a change to an existing golden means the C does
+# something other than what was recorded before.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 top=$(git -C "$here" rev-parse --show-toplevel)

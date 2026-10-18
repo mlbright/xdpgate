@@ -17,6 +17,8 @@
 #   state                  XDP attachment, pins and map contents afterwards
 #
 # Only dates are masked; durations, counts and messages must match exactly.
+# The few places the port deliberately prints something else are listed, with
+# their reasons, in goldens/deviations.sed, which recording applies.
 # Every scenario gets its own fresh namespaces, with a veth pair gate0/peer0
 # carrying 192.0.2.{1,10,11}/24 and 2001:db8:1::{1,10,11}/64 on gate0, and
 # default routes whose source addresses are 192.0.2.1 and 2001:db8:1::1.
@@ -130,6 +132,10 @@ for scen in "${scenarios[@]}"; do
 	done
 
 	if [ $record = 1 ]; then
+		for f in stdout stderr; do
+			sed -f "$TESTS/goldens/deviations.sed" "$out/$f" >"$out/$f.ported"
+			mv "$out/$f.ported" "$out/$f"
+		done
 		if [ -f "$scen/unordered" ]; then
 			LC_ALL=C sort "$out/stdout" >"$out/stdout.sorted"
 			mv "$out/stdout.sorted" "$out/stdout"

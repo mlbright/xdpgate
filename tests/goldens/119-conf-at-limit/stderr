@@ -511,4 +511,4 @@ warning: 2001:db8:5::fd is not currently assigned to this host (gating it is a n
 warning: 2001:db8:5::fe is not currently assigned to this host (gating it is a no-op until it is)
 warning: 2001:db8:5::ff is not currently assigned to this host (gating it is a no-op until it is)
 protected_v4: cannot protect 198.18.0.255: Argument list too long
-  the map is full (max_entries 256); raise it in xdpgate.bpf.c and rebuild.
+  the map is full (max_entries 256); raise it in src/layout.zig and rebuild.

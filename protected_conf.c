@@ -186,7 +186,7 @@ int prot_set_parse(const char *path, struct prot_set *out)
 		fprintf(stderr,
 			"%s: too many addresses (v4 %zu, v6 %zu; limit %d per family).\n"
 			"  Raise max_entries on protected_v4/protected_v6 in\n"
-			"  xdpgate.bpf.c and rebuild if you genuinely need more.\n",
+			"  src/layout.zig and rebuild if you genuinely need more.\n",
 			path, out->n_v4, out->n_v6, PROT_MAX_ENTRIES);
 		goto out;
 	}
@@ -333,7 +333,7 @@ static void report_update_failure(const char *map, const char *ip, int err)
 	if (err == E2BIG)
 		fprintf(stderr,
 			"  the map is full (max_entries %d); raise it in "
-			"xdpgate.bpf.c and rebuild.\n", PROT_MAX_ENTRIES);
+			"src/layout.zig and rebuild.\n", PROT_MAX_ENTRIES);
 }
 
 int prot_set_reconcile(int fd4, int fd6, const struct prot_set *s,
