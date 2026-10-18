@@ -18,15 +18,15 @@ comptime {
     std.debug.assert(@sizeOf(ip.V6) == @sizeOf(layout.ProtectedKey6));
 }
 
-fn Map(comptime map_name: []const u8, comptime K: type, comptime V: type) type {
+fn Map(comptime map_name: [:0]const u8, comptime K: type, comptime V: type) type {
     return struct {
         fd: linux.fd_t,
 
         const Self = @This();
         pub const Key = K;
         pub const Value = V;
-        pub const name = map_name;
-        pub const pin_path = layout.pin_dir ++ "/" ++ map_name;
+        pub const name: [:0]const u8 = map_name;
+        pub const pin_path: [:0]const u8 = layout.pin_dir ++ "/" ++ map_name;
 
         /// The map pinned at pin_path, as bpf_obj_get() opens it.
         pub fn openPinned(map: *Self) E {

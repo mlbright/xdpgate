@@ -5,11 +5,10 @@ const std = @import("std");
 //   zig-out/bin/xdpgate-load, zig-out/bin/xdpgate-ctl   the CLIs
 //   zig-out/lib/xdpgate.bpf.o                            the XDP program
 //
-// The XDP program is Zig, repaired after the build by tools/bpf_fixup.zig
-// (docs/adr/0001-xdp-program-in-zig-with-object-fixup.md). xdpgate-ctl is Zig,
-// built ReleaseSafe. xdpgate-load is still the C source, compiled with `zig cc`
-// and the flags the Makefile used; its headers come from libbpf-dev, and it
-// links the system libbpf.so.1 by path.
+// The XDP program is repaired after the build by tools/bpf_fixup.zig
+// (docs/adr/0001-xdp-program-in-zig-with-object-fixup.md). The CLIs are built
+// ReleaseSafe and link glibc; xdpgate-load also links the system's
+// libbpf.so.1, by path, so building needs no libbpf headers.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const multiarch = b.fmt("{s}-linux-gnu", .{@tagName(target.result.cpu.arch)});
@@ -31,42 +30,14 @@ pub fn build(b: *std.Build) void {
     const bpf_obj = fix_bpf.addOutputFileArg("xdpgate.bpf.o");
     b.getInstallStep().dependOn(&b.addInstallLibFile(bpf_obj, "xdpgate.bpf.o").step);
 
-    // Only <bpf/...> is taken from /usr/include, so the CLIs otherwise compile
-    // against Zig's own libc and kernel headers.
-    const libbpf_headers = b.addWriteFiles();
-    _ = libbpf_headers.addCopyDirectory(b.graph.cwdRelativePath("/usr/include/bpf"), "bpf", .{});
-    const libbpf = b.graph.cwdRelativePath(b.fmt("/usr/lib/{s}/libbpf.so.1", .{multiarch}));
-
-    const load = b.createModule(.{
-        .target = target,
-        .optimize = .ReleaseFast, // -O2, as before
-        .link_libc = true,
-    });
-    load.addCSourceFiles(.{
-        .files = &.{ "xdpgate_load.c", "protected_conf.c" },
-        .flags = &.{ "-g", "-Wall" },
-    });
-    load.addIncludePath(libbpf_headers.getDirectory());
-    load.addObjectFile(libbpf);
+    const load = addCli(b, "src/load.zig", target, layout);
+    load.addObjectFile(b.graph.cwdRelativePath(b.fmt("/usr/lib/{s}/libbpf.so.1", .{multiarch})));
     b.installArtifact(b.addExecutable(.{ .name = "xdpgate-load", .root_module = load }));
-
-    // glibc is linked for the handful of functions in src/glibc.zig.
-    const ctl = b.createModule(.{
-        .root_source_file = b.path("src/ctl.zig"),
-        .target = target,
-        .optimize = .ReleaseSafe,
-        .link_libc = true,
-        .imports = &.{.{ .name = "layout", .module = layout }},
-    });
+    const ctl = addCli(b, "src/ctl.zig", target, layout);
     b.installArtifact(b.addExecutable(.{ .name = "xdpgate-ctl", .root_module = ctl }));
 
     const test_step = b.step("test", "Run the unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ctl })).step);
-
-    // The C half of the frozen layout must agree with src/layout.zig.
-    const c_layout = b.createModule(.{ .target = target, .link_libc = true });
-    c_layout.addCSourceFile(.{ .file = b.path("tests/layout_check.c") });
-    test_step.dependOn(&b.addObject(.{ .name = "layout_check", .root_module = c_layout }).step);
 
     // The fix-up pass must refuse the relocation that would bind every map
     // lookup to one map.
@@ -77,6 +48,16 @@ pub fn build(b: *std.Build) void {
     refuse.expectExitCode(1);
     refuse.expectStdErrMatch("map reference through the section symbol");
     test_step.dependOn(&refuse.step);
+}
+
+fn addCli(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, layout: *std.Build.Module) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path(root),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .imports = &.{.{ .name = "layout", .module = layout }},
+    });
 }
 
 /// A BPF object as the fix-up pass expects it: ReleaseSmall (Debug overflows

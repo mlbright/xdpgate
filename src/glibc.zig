@@ -12,6 +12,8 @@ pub extern "c" fn localtime_r(timep: *const i64, result: *Tm) ?*Tm;
 pub extern "c" fn strftime(s: [*]u8, max: usize, format: [*:0]const u8, tm: *const Tm) usize;
 pub extern "c" fn getifaddrs(ifap: *?*IfAddrs) c_int;
 pub extern "c" fn freeifaddrs(ifa: *IfAddrs) void;
+pub extern "c" fn if_nametoindex(ifname: [*:0]const u8) c_uint;
+extern "c" fn __errno_location() *c_int;
 
 /// struct tm.
 pub const Tm = extern struct {
@@ -41,5 +43,15 @@ pub const IfAddrs = extern struct {
 
 /// strerror(e), as the C printed it.
 pub fn errorText(e: linux.E) [:0]const u8 {
-    return std.mem.span(strerror(@backingInt(e)));
+    return errnumText(@backingInt(e));
+}
+
+/// strerror(n) for any error number, libbpf's own (4000 and up) included.
+pub fn errnumText(n: c_int) [:0]const u8 {
+    return std.mem.span(strerror(n));
+}
+
+/// errno, as a libbpf call left it.
+pub fn errno() c_int {
+    return __errno_location().*;
 }

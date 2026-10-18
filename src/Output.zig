@@ -24,6 +24,25 @@ pub fn flush(o: Output) void {
     o.stdout.flush() catch {};
 }
 
+/// The process's own stdout and stderr.
+pub const Stdio = struct {
+    stdout_buf: [4096]u8,
+    stderr_buf: [1024]u8,
+    stdout: std.Io.File.Writer,
+    stderr: std.Io.File.Writer,
+
+    /// Initializes in place: the writers point into the struct's buffers.
+    pub fn init(s: *Stdio, io: std.Io) Output {
+        s.stdout = std.Io.File.stdout().writerStreaming(io, &s.stdout_buf);
+        s.stderr = std.Io.File.stderr().writerStreaming(io, &s.stderr_buf);
+        return .{
+            .stdout = &s.stdout.interface,
+            .stderr = &s.stderr.interface,
+            .line_buffered = std.Io.File.stdout().isTty(io) catch false,
+        };
+    }
+};
+
 /// Output for a unit test, writing into two buffers.
 pub const Captured = struct {
     stdout: std.Io.Writer.Allocating,

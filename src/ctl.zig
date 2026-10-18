@@ -35,16 +35,8 @@ const max_timeout_secs: u64 = 100 * 365 * 24 * 3600;
 
 pub fn main(init: std.process.Init) !u8 {
     const gpa = init.arena.allocator(); // process lifetime: nothing to free
-
-    var stdout_buf: [4096]u8 = undefined;
-    var stderr_buf: [1024]u8 = undefined;
-    var stdout = std.Io.File.stdout().writerStreaming(init.io, &stdout_buf);
-    var stderr = std.Io.File.stderr().writerStreaming(init.io, &stderr_buf);
-    const out: Output = .{
-        .stdout = &stdout.interface,
-        .stderr = &stderr.interface,
-        .line_buffered = std.Io.File.stdout().isTty(init.io) catch false,
-    };
+    var stdio: Output.Stdio = undefined;
+    const out = stdio.init(init.io);
     defer out.flush();
 
     const ctl: Ctl = .{
