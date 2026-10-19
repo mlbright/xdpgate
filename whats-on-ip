@@ -13,7 +13,8 @@ Usage:
     whats-on-ip --preflight     # fail on an empty or mgmt-overlapping set
 
 Needs `ss` (iproute2). Run with sudo to see process names. --preflight also
-reads the gate's protected set (xdpgate-ctl) and Tailscale's underlay endpoints.
+reads the gate's protected set (xdpgate-ctl) and Tailscale's underlay endpoints,
+and needs root to read the pinned maps.
 """
 
 import argparse
@@ -26,6 +27,8 @@ import subprocess
 import sys
 
 CONF_PATH = os.environ.get("XDPGATE_CONF") or "/etc/xdpgate/protected.conf"
+PIN_DIR = "/sys/fs/bpf/xdpgate"     # layout.pin_dir in src/layout.zig
+PROTECTED_PINS = ("protected_v4", "protected_v6")
 
 WILDCARD4 = "0.0.0.0"
 WILDCARD6 = "::"
@@ -202,16 +205,41 @@ def worst_severity(reason_map):
     return HARD if HARD in reason_map.values() else SOFT
 
 
+def pinned(name):
+    """Is the gate's map `name` pinned? Exits if that can't be told, as when
+    not root: guessing "no" would report a live gate as not attached."""
+    path = os.path.join(PIN_DIR, name)
+    try:
+        os.stat(path)
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        sys.exit(f"error: cannot tell whether the gate is attached: {path}: "
+                 f"{e.strerror} (run as root)")
+    return True
+
+
 def protected_set():
-    """(list_of_ips, attached?). Parses `xdpgate-ctl list` output."""
+    """(list_of_ips, attached?). Reads the live set with `xdpgate-ctl export`,
+    which fails unless it could open both protected maps, so a listing that
+    succeeds is the whole set. The gate counts as not attached only when
+    neither protected map is pinned; any other failure is an error."""
     ctl = shutil.which("xdpgate-ctl") or "./xdpgate-ctl"
     try:
-        res = subprocess.run([ctl, "list"], capture_output=True, text=True)
+        res = subprocess.run([ctl, "export"], capture_output=True, text=True)
     except FileNotFoundError:
         sys.exit("error: xdpgate-ctl not found (build it or add to PATH)")
-    attached = "is xdpgate-load attached" not in res.stderr
-    ips = re.findall(r"^\s*protected v[46]\s+(\S+)", res.stdout, re.MULTILINE)
-    return ips, attached
+    if res.returncode != 0:
+        if not any(pinned(name) for name in PROTECTED_PINS):
+            return [], False
+        sys.stderr.write(res.stderr)
+        sys.exit("error: xdpgate-ctl export failed, so the protected set is unknown")
+    # Config-file syntax: one address per line, '#' starts a comment. Export
+    # walks the maps in hash order; sort so the report is stable.
+    ips = [ln.split("#", 1)[0].strip() for ln in res.stdout.splitlines()]
+    ips = [ipaddress.ip_address(a) for a in ips if a]
+    ips.sort(key=lambda a: (a.version, a))
+    return [str(a) for a in ips], True
 
 
 def cmd_preflight(listeners, strict=False):

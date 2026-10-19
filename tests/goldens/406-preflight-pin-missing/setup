@@ -1,0 +1,2 @@
+attach
+rm /sys/fs/bpf/xdpgate/protected_v6
