@@ -224,7 +224,9 @@ def protected_set():
     which fails unless it could open both protected maps, so a listing that
     succeeds is the whole set. The gate counts as not attached only when
     neither protected map is pinned; any other failure is an error."""
-    ctl = shutil.which("xdpgate-ctl") or "./xdpgate-ctl"
+    # In a checkout, fall back to the build output beside this script.
+    here = os.path.dirname(os.path.realpath(__file__))
+    ctl = shutil.which("xdpgate-ctl") or os.path.join(here, "zig-out", "bin", "xdpgate-ctl")
     try:
         res = subprocess.run([ctl, "export"], capture_output=True, text=True)
     except FileNotFoundError:
