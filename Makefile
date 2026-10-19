@@ -34,8 +34,9 @@ audit:
 
 # Preflight: fail if any protected IP carries Tailscale underlay / management
 # traffic. Run after seeding the protected set, before relying on the gate.
+# Reading the pinned maps needs root, so it asks sudo.
 preflight:
-	@./whats-on-ip --preflight
+	@sudo ./whats-on-ip --preflight
 
 clean:
 	rm -rf $(OUT) .zig-cache
