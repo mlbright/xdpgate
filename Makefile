@@ -4,12 +4,14 @@
 # Build as yourself, install as root: `make && sudo make install`. Installing
 # never builds, so root needs no Rust toolchain.
 #
-# The XDP program is Rust, built by the nightly pinned in xdpgate-ebpf/ with
-# bpf-linker; the CLIs are still C, built with `make deps`'s packages.
+# The XDP program is built by the nightly pinned in xdpgate-ebpf/ with
+# bpf-linker, xdpgate-ctl by the stable toolchain pinned in
+# rust-toolchain.toml. xdpgate-load is still C, built with `make deps`'s
+# packages.
 CC       ?= cc
 CARGO    ?= cargo
 
-# Build dependencies of the C CLIs (apt package names on Ubuntu 24.04 LTS).
+# Build dependencies of the C loader (apt package names on Ubuntu 24.04 LTS).
 # The optional `verify` target also needs bpftool, which ships in the
 # kernel tooling: apt-get install linux-tools-$(shell uname -r)
 APT_DEPS := gcc libbpf-dev make
@@ -21,6 +23,10 @@ EBPF_OUT := xdpgate-ebpf/target/bpfel-unknown-none/release/xdpgate
 
 all: xdpgate.bpf.o xdpgate-load xdpgate-ctl
 
+# Every Rust binary in the workspace: xdpgate-ctl and check-object.
+cargo-build:
+	$(CARGO) build --release --locked
+
 # Install the core build dependencies (Ubuntu 24.04 LTS).
 deps:
 	sudo apt-get update
@@ -28,26 +34,27 @@ deps:
 
 # The XDP program, then the build check from ADR 0001: libbpf must see exactly
 # the four maps, with the frozen sizes and capacities, pinned by name.
-xdpgate.bpf.o: FORCE
+xdpgate.bpf.o: cargo-build
 	@command -v bpf-linker >/dev/null || { \
 		echo "bpf-linker not found. It needs LLVM 23 from apt.llvm.org (see README.md), then:"; \
 		echo "  LLVM_PREFIX=/usr/lib/llvm-23 cargo install bpf-linker --version 0.11.0 \\"; \
 		echo "    --locked --no-default-features --features llvm-23"; \
 		exit 1; } >&2
 	cd xdpgate-ebpf && $(CARGO) build --release --locked
-	$(CARGO) run --release --locked --quiet --bin check-object -- $(EBPF_OUT)
+	target/release/check-object $(EBPF_OUT)
 	cp $(EBPF_OUT) $@
 
-# The protected set is config-driven; both binaries apply it through the same
-# parse/check/reconcile routines so attach and reload cannot drift apart.
+# The protected set is config-driven. The C loader applies it through
+# protected_conf.c, xdpgate-ctl through the same parse/check/reconcile steps
+# in xdpgate/src/protected.rs, and the goldens hold both to the same output.
 protected_conf.o: protected_conf.c protected_conf.h common.h
 	$(CC) $(USR_CFLAGS) -c $< -o $@
 
 xdpgate-load: xdpgate_load.c protected_conf.o common.h protected_conf.h
 	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
 
-xdpgate-ctl: xdpgate_ctl.c protected_conf.o common.h protected_conf.h
-	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
+xdpgate-ctl: cargo-build
+	cp target/release/xdpgate-ctl $@
 
 # Unit tests, then the golden-transcript and netns traffic suites (tests/).
 # The suites run in throwaway namespaces and ask sudo for them, so the build
@@ -85,5 +92,4 @@ clean:
 install:
 	./install.sh
 
-.PHONY: all deps check clean verify audit preflight install FORCE
-FORCE:
+.PHONY: all cargo-build deps check clean verify audit preflight install

@@ -6,7 +6,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+libc = "0.2"
 xdpgate-common = { path = "../xdpgate-common" }
+
+[[bin]]
+name = "xdpgate-ctl"
+path = "src/bin/xdpgate-ctl.rs"
 
 # Not installed: the Makefile runs it on every freshly built xdpgate.bpf.o.
 [[bin]]
