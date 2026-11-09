@@ -1,36 +1,21 @@
 # xdpgate Makefile
-# Development platform: Ubuntu 24.04 LTS (Noble Numbat).
+# Development platform: Ubuntu 24.04 LTS (Noble Numbat). The build needs
+# rustup, LLVM 23 from apt.llvm.org and bpf-linker; see README.md.
 #
 # Build as yourself, install as root: `make && sudo make install`. Installing
 # never builds, so root needs no Rust toolchain.
 #
-# The XDP program is built by the nightly pinned in xdpgate-ebpf/ with
-# bpf-linker, xdpgate-ctl by the stable toolchain pinned in
-# rust-toolchain.toml. xdpgate-load is still C, built with `make deps`'s
-# packages.
-CC       ?= cc
+# The CLIs are built by the stable toolchain pinned in rust-toolchain.toml,
+# the XDP program by the nightly pinned in xdpgate-ebpf/ with bpf-linker.
 CARGO    ?= cargo
-
-# Build dependencies of the C loader (apt package names on Ubuntu 24.04 LTS).
-# The optional `verify` target also needs bpftool, which ships in the
-# kernel tooling: apt-get install linux-tools-$(shell uname -r)
-APT_DEPS := gcc libbpf-dev make
-
-USR_CFLAGS := -O2 -g -Wall
-LIBS       := -lbpf
 
 EBPF_OUT := xdpgate-ebpf/target/bpfel-unknown-none/release/xdpgate
 
 all: xdpgate.bpf.o xdpgate-load xdpgate-ctl
 
-# Every Rust binary in the workspace: xdpgate-ctl and check-object.
+# Every Rust binary in the workspace: the two CLIs and check-object.
 cargo-build:
 	$(CARGO) build --release --locked
-
-# Install the core build dependencies (Ubuntu 24.04 LTS).
-deps:
-	sudo apt-get update
-	sudo apt-get install -y $(APT_DEPS)
 
 # The XDP program, then the build check from ADR 0001: libbpf must see exactly
 # the four maps, with the frozen sizes and capacities, pinned by name.
@@ -44,17 +29,8 @@ xdpgate.bpf.o: cargo-build
 	target/release/check-object $(EBPF_OUT)
 	cp $(EBPF_OUT) $@
 
-# The protected set is config-driven. The C loader applies it through
-# protected_conf.c, xdpgate-ctl through the same parse/check/reconcile steps
-# in xdpgate/src/protected.rs, and the goldens hold both to the same output.
-protected_conf.o: protected_conf.c protected_conf.h common.h
-	$(CC) $(USR_CFLAGS) -c $< -o $@
-
-xdpgate-load: xdpgate_load.c protected_conf.o common.h protected_conf.h
-	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
-
-xdpgate-ctl: cargo-build
-	cp target/release/xdpgate-ctl $@
+xdpgate-load xdpgate-ctl: cargo-build
+	cp target/release/$@ $@
 
 # Unit tests, then the golden-transcript and netns traffic suites (tests/).
 # The suites run in throwaway namespaces and ask sudo for them, so the build
@@ -65,7 +41,8 @@ check: all
 	sudo tests/traffic.sh .
 
 # Verify the program loads + passes the verifier without attaching to a NIC.
-# Run as root, after `make`.
+# Run as root, after `make`. Needs bpftool, which ships in the kernel tooling:
+# apt-get install linux-tools-$(uname -r)
 verify:
 	@test -f xdpgate.bpf.o || { echo "no xdpgate.bpf.o; run \`make\` first" >&2; exit 1; }
 	bpftool prog load xdpgate.bpf.o /sys/fs/bpf/xdpgate_verify_test \
@@ -83,7 +60,7 @@ preflight:
 	@./whats-on-ip --preflight
 
 clean:
-	rm -f xdpgate.bpf.o protected_conf.o xdpgate-load xdpgate-ctl
+	rm -f xdpgate.bpf.o xdpgate-load xdpgate-ctl
 	$(CARGO) clean
 	cd xdpgate-ebpf && $(CARGO) clean
 
@@ -92,4 +69,4 @@ clean:
 install:
 	./install.sh
 
-.PHONY: all cargo-build deps check clean verify audit preflight install
+.PHONY: all cargo-build check clean verify audit preflight install

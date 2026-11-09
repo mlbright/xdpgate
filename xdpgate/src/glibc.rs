@@ -10,7 +10,7 @@
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::mem::MaybeUninit;
 
-pub use libc::{E2BIG, ENOENT};
+pub use libc::{E2BIG, EEXIST, ENOENT};
 
 // The libc crate does not declare these two for Linux.
 unsafe extern "C" {
@@ -111,6 +111,11 @@ pub fn local_time_text(when: i64) -> Option<Vec<u8>> {
         )
     };
     Some(buf[..n].iter().map(|&c| c as u8).collect())
+}
+
+/// `if_nametoindex`: 0 if there is no such interface.
+pub fn if_nametoindex(name: &CStr) -> u32 {
+    unsafe { libc::if_nametoindex(name.as_ptr()) }
 }
 
 /// `access(path, R_OK) == 0`: readable by the real user, as the C checked.

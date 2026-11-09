@@ -6,10 +6,9 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::io;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::ptr::{self, NonNull};
 
 use xdpgate_common::{GrantExpiry, GrantKey4, GrantKey6, ProtectedKey6};
@@ -18,6 +17,10 @@ use crate::glibc::Errno;
 
 /// `BPF_PROG_TYPE_XDP` from `enum bpf_prog_type`.
 pub const BPF_PROG_TYPE_XDP: u32 = 6;
+
+/// XDP attach flags from linux/if_link.h.
+pub const XDP_FLAGS_UPDATE_IF_NOEXIST: u32 = 1;
+pub const XDP_FLAGS_SKB_MODE: u32 = 2;
 
 #[repr(C)]
 struct bpf_object {
@@ -64,6 +67,8 @@ unsafe extern "C" {
         opts: *const bpf_object_open_opts,
     ) -> *mut bpf_object;
     fn bpf_object__close(obj: *mut bpf_object);
+    fn bpf_object__load(obj: *mut bpf_object) -> c_int;
+    fn bpf_object__find_map_by_name(obj: *const bpf_object, name: *const c_char) -> *mut bpf_map;
     fn bpf_object__next_map(obj: *const bpf_object, map: *const bpf_map) -> *mut bpf_map;
     fn bpf_object__find_program_by_name(
         obj: *const bpf_object,
@@ -76,8 +81,13 @@ unsafe extern "C" {
     fn bpf_map__value_size(map: *const bpf_map) -> u32;
     fn bpf_map__max_entries(map: *const bpf_map) -> u32;
     fn bpf_map__pin_path(map: *const bpf_map) -> *const c_char;
+    fn bpf_map__fd(map: *const bpf_map) -> c_int;
 
     fn bpf_program__type(prog: *const bpf_program) -> u32;
+    fn bpf_program__fd(prog: *const bpf_program) -> c_int;
+
+    fn bpf_xdp_attach(ifindex: c_int, prog_fd: c_int, flags: u32, opts: *const c_void) -> c_int;
+    fn bpf_xdp_detach(ifindex: c_int, flags: u32, opts: *const c_void) -> c_int;
 
     // The low-level map calls return a negative errno on failure.
     fn bpf_obj_get(pathname: *const c_char) -> c_int;
@@ -90,6 +100,18 @@ unsafe extern "C" {
     ) -> c_int;
     fn bpf_map_delete_elem(fd: c_int, key: *const c_void) -> c_int;
     fn bpf_map_get_next_key(fd: c_int, key: *const c_void, next_key: *mut c_void) -> c_int;
+    fn bpf_obj_get_info_by_fd(bpf_fd: c_int, info: *mut c_void, info_len: *mut u32) -> c_int;
+}
+
+/// The start of the kernel's `struct bpf_map_info`. The kernel fills in as
+/// much of it as the caller asks for.
+#[repr(C)]
+#[derive(Default)]
+struct bpf_map_info_head {
+    r#type: u32,
+    id: u32,
+    key_size: u32,
+    value_size: u32,
 }
 
 /// `BPF_ANY`: create the entry or overwrite it.
@@ -113,7 +135,29 @@ fn check(rc: c_int) -> Result<c_int, Errno> {
     if rc < 0 { Err(Errno(-rc)) } else { Ok(rc) }
 }
 
-/// A BPF map, by file descriptor, with its key and value types.
+/// Why a map could not be used.
+#[derive(Debug)]
+pub enum MapError {
+    Errno(Errno),
+    /// The map's key or value size is not the Rust type's. The kernel copies
+    /// a map's own sizes in and out of the buffers it is given, so using it
+    /// anyway would let it write past them. The C never checked.
+    Layout {
+        key_size: u32,
+        value_size: u32,
+        want_key_size: usize,
+        want_value_size: usize,
+    },
+}
+
+impl From<Errno> for MapError {
+    fn from(errno: Errno) -> Self {
+        MapError::Errno(errno)
+    }
+}
+
+/// A BPF map, by file descriptor, with its key and value types. Every way
+/// of getting one first checks the map's key and value sizes.
 pub struct MapFd<K, V> {
     fd: OwnedFd,
     _kv: PhantomData<fn() -> (K, V)>,
@@ -121,10 +165,31 @@ pub struct MapFd<K, V> {
 
 impl<K: Pod, V: Pod> MapFd<K, V> {
     /// Opens the map pinned at `path`.
-    pub fn open_pinned(path: &CStr) -> Result<Self, Errno> {
+    pub fn open_pinned(path: &CStr) -> Result<Self, MapError> {
         let fd = check(unsafe { bpf_obj_get(path.as_ptr()) })?;
+        Self::checked(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// A handle on a map of a loaded [`Object`], usable after it closes.
+    pub fn from_object(map: &Map<'_>) -> Result<Self, MapError> {
+        let fd = map.fd()?.try_clone_to_owned();
+        Self::checked(fd.map_err(|e| Errno(e.raw_os_error().unwrap_or(0)))?)
+    }
+
+    fn checked(fd: OwnedFd) -> Result<Self, MapError> {
+        let mut info = bpf_map_info_head::default();
+        let mut len = size_of::<bpf_map_info_head>() as u32;
+        check(unsafe { bpf_obj_get_info_by_fd(fd.as_raw_fd(), (&raw mut info).cast(), &mut len) })?;
+        if info.key_size as usize != size_of::<K>() || info.value_size as usize != size_of::<V>() {
+            return Err(MapError::Layout {
+                key_size: info.key_size,
+                value_size: info.value_size,
+                want_key_size: size_of::<K>(),
+                want_value_size: size_of::<V>(),
+            });
+        }
         Ok(MapFd {
-            fd: unsafe { OwnedFd::from_raw_fd(fd) },
+            fd,
             _kv: PhantomData,
         })
     }
@@ -191,7 +256,7 @@ pub struct Object {
 impl Object {
     /// Opens `path` without loading it. Maps that ask to be pinned by name get
     /// their pin paths under `pin_root`.
-    pub fn open(path: &CStr, pin_root: &CStr) -> io::Result<Object> {
+    pub fn open(path: &CStr, pin_root: &CStr) -> Result<Object, Errno> {
         let opts = bpf_object_open_opts {
             sz: size_of::<bpf_object_open_opts>(),
             object_name: ptr::null(),
@@ -209,7 +274,7 @@ impl Object {
         let obj = unsafe { bpf_object__open_file(path.as_ptr(), &opts) };
         NonNull::new(obj)
             .map(|ptr| Object { ptr })
-            .ok_or_else(io::Error::last_os_error)
+            .ok_or_else(Errno::last)
     }
 
     /// Every map the object defines, in the object's order.
@@ -223,6 +288,21 @@ impl Object {
                 ptr: next,
                 _obj: PhantomData,
             })
+        })
+    }
+
+    /// Creates the maps (or reuses their pins, if every parameter matches),
+    /// pins them, and loads the programs into the kernel.
+    pub fn load(&mut self) -> Result<(), Errno> {
+        check(unsafe { bpf_object__load(self.ptr.as_ptr()) })?;
+        Ok(())
+    }
+
+    pub fn find_map(&self, name: &CStr) -> Option<Map<'_>> {
+        let map = unsafe { bpf_object__find_map_by_name(self.ptr.as_ptr(), name.as_ptr()) };
+        NonNull::new(map).map(|ptr| Map {
+            ptr,
+            _obj: PhantomData,
         })
     }
 
@@ -270,6 +350,12 @@ impl<'obj> Map<'obj> {
         unsafe { bpf_map__max_entries(self.ptr.as_ptr()) }
     }
 
+    /// The map's file descriptor, once the object is loaded.
+    pub fn fd(&self) -> Result<BorrowedFd<'obj>, Errno> {
+        let fd = check(unsafe { bpf_map__fd(self.ptr.as_ptr()) })?;
+        Ok(unsafe { BorrowedFd::borrow_raw(fd) })
+    }
+
     /// Where libbpf will pin the map on load, or `None` if it won't.
     pub fn pin_path(&self) -> Option<&'obj CStr> {
         let path = unsafe { bpf_map__pin_path(self.ptr.as_ptr()) };
@@ -284,9 +370,28 @@ pub struct Program<'obj> {
     _obj: PhantomData<&'obj Object>,
 }
 
-impl Program<'_> {
+impl<'obj> Program<'obj> {
     /// The `enum bpf_prog_type` value.
     pub fn prog_type(&self) -> u32 {
         unsafe { bpf_program__type(self.ptr.as_ptr()) }
     }
+
+    /// The program's file descriptor, once the object is loaded.
+    pub fn fd(&self) -> Result<BorrowedFd<'obj>, Errno> {
+        let fd = check(unsafe { bpf_program__fd(self.ptr.as_ptr()) })?;
+        Ok(unsafe { BorrowedFd::borrow_raw(fd) })
+    }
+}
+
+/// Attaches `prog` to the interface through netlink, as the C did, so either
+/// version's detach removes either version's gate. It stays attached after
+/// this process exits.
+pub fn xdp_attach(ifindex: u32, prog: BorrowedFd<'_>, flags: u32) -> Result<(), Errno> {
+    check(unsafe { bpf_xdp_attach(ifindex as c_int, prog.as_raw_fd(), flags, ptr::null()) })?;
+    Ok(())
+}
+
+pub fn xdp_detach(ifindex: u32, flags: u32) -> Result<(), Errno> {
+    check(unsafe { bpf_xdp_detach(ifindex as c_int, flags, ptr::null()) })?;
+    Ok(())
 }
