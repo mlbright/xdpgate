@@ -1,0 +1,171 @@
+# Builds and tests xdpgate natively on amd64 and arm64 (AWS Graviton's
+# architecture) for every push and pull request. A version tag (0.2.0, no
+# "v") also publishes the GitHub Release: one tarball per architecture, a
+# SHA256SUMS file, and a build attestation for each. `make publish` pushes
+# that tag; see ADR 0003.
+#
+# Only GitHub's own actions are used, each pinned to a commit hash
+# (Dependabot proposes bumps), and only the release job can write.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            bpftool_sha256: 09150596f09356b0ff632dd7f9856e0ea86bf96b269e9bc94278d9a9432a268c
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            bpftool_sha256: d68443d945c146080151eb215bebaa400294ab7ada22af4f5d0a940f5992b9d9
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # git describe names the version from the tags
+          persist-credentials: false
+
+      # Pushes and pull requests reuse bpf-linker and the crate downloads.
+      # Tag builds start from nothing, so nothing an earlier run left in the
+      # cache can reach a release.
+      - name: Restore bpf-linker and crate downloads
+        if: github.ref_type != 'tag'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/bpf-linker
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+          key: ${{ runner.os }}-${{ matrix.arch }}-bpf-linker-0.11.0-llvm-23-${{ hashFiles('Cargo.lock', 'xdpgate-ebpf/Cargo.lock') }}
+
+      - name: Install the pinned Rust toolchains
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+              sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install --no-self-update
+          (cd xdpgate-ebpf && rustup toolchain install --no-self-update)
+
+      # bpf-linker links against LLVM 23, which must match the pinned
+      # nightly's LLVM major (ADR 0001). apt.llvm.org's key is checked
+      # against its known fingerprint before apt trusts it.
+      - name: Install LLVM 23 from apt.llvm.org
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/llvm.key" https://apt.llvm.org/llvm-snapshot.gpg.key
+          gpg --show-keys --with-colons "$RUNNER_TEMP/llvm.key" |
+            grep -qx 'fpr:::::::::6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+          sudo gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg "$RUNNER_TEMP/llvm.key"
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-23 main" |
+            sudo tee /etc/apt/sources.list.d/llvm-23.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends llvm-23 llvm-23-dev
+
+      - name: Install bpf-linker 0.11.0
+        run: |
+          if ! command -v bpf-linker >/dev/null; then
+            LLVM_PREFIX=/usr/lib/llvm-23 cargo install bpf-linker --version 0.11.0 \
+              --locked --no-default-features --features llvm-23
+          fi
+          bpf-linker --version
+
+      # The golden suite reads the maps with bpftool, independently of the
+      # tools under test.
+      - name: Install bpftool v7.7.0
+        run: |
+          tarball=bpftool-v7.7.0-${{ matrix.arch }}.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/libbpf/bpftool/releases/download/v7.7.0/$tarball"
+          echo "${{ matrix.bpftool_sha256 }}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          sudo tar -xzf "$RUNNER_TEMP/$tarball" -C /usr/local/sbin bpftool
+          sudo chmod 0755 /usr/local/sbin/bpftool
+          bpftool version
+
+      - name: Build
+        run: make
+
+      - name: Unit tests, goldens and traffic suite
+        run: make check
+
+      - name: Pack the tarball
+        run: make dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xdpgate-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the attestations
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: xdpgate-*
+          merge-multiple: true
+          path: dist
+
+      # Both tarballs must be named for this tag; anything else means git
+      # describe saw something other than a clean tagged commit.
+      - name: Check the tarballs and write SHA256SUMS
+        working-directory: dist
+        run: |
+          ls -l
+          for arch in amd64 arm64; do
+            test -f "xdpgate-$GITHUB_REF_NAME-linux-$arch.tar.gz"
+          done
+          test "$(ls | wc -l)" = 2
+          sha256sum xdpgate-*.tar.gz >SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/xdpgate-*.tar.gz
+            dist/SHA256SUMS
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat >"$RUNNER_TEMP/notes.md" <<EOF
+          xdpgate $TAG for Ubuntu 24.04, on amd64 and arm64 (AWS Graviton included).
+          The examples below use arm64; x86-64 hosts take the amd64 tarball.
+
+          Check a download:
+
+              sha256sum -c --ignore-missing SHA256SUMS
+              gh attestation verify xdpgate-$TAG-linux-arm64.tar.gz -R $GITHUB_REPOSITORY
+
+          Install, as root: \`install.sh\` runs the traffic suite against these files
+          on this host's kernel first, and installs nothing if any check fails.
+
+              tar -xzf xdpgate-$TAG-linux-arm64.tar.gz
+              cd xdpgate-$TAG-linux-arm64
+              sudo ./install.sh
+          EOF
+          gh release create "$TAG" dist/xdpgate-*.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "xdpgate $TAG" --notes-file "$RUNNER_TEMP/notes.md"

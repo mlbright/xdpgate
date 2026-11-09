@@ -100,5 +100,11 @@ clean:
 install:
 	./install.sh
 
-.PHONY: all cargo-build check clean dist verify audit preflight install FORCE
+# Release VERSION (x.y.z, no "v"): checks the tree is the tip of main, runs
+# `make check`, then tags it and pushes the tag. The release workflow builds,
+# tests and publishes both architectures. See scripts/publish.sh, ADR 0003.
+publish:
+	REMOTE="$(REMOTE)" scripts/publish.sh "$(VERSION)"
+
+.PHONY: all cargo-build check clean dist verify audit preflight install publish FORCE
 FORCE:
