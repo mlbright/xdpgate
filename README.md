@@ -23,17 +23,29 @@ inbound packet
 
 ## Components
 
-- `xdpgate.bpf.c` — the XDP program (verifier-clean on kernel 6.8).
-- `xdpgate-load` — loads the object, attaches XDP in **generic/SKB mode**, pins
-  the four maps under `/sys/fs/bpf/xdpgate`. Run once at boot.
-- `protected_conf.c` — parses `protected.conf`, refuses configurations that
-  would cut the host off, and reconciles the live maps to the file. Compiled
-  into **both** binaries so attach and reload cannot drift apart.
-- `xdpgate-ctl` — per-SPA map editor + operator tooling
+The XDP program and both CLIs are written in Rust.
+
+- `xdpgate-ebpf/` — the XDP program (verifier-clean on kernel 7.0). It uses no
+  crates, not even aya-ebpf: its four maps are written by hand in the shape
+  libbpf expects, and every build asks libbpf to confirm them
+  (`check-object`). See `docs/adr/0001-xdp-program-in-rust-with-hand-written-maps.md`.
+- `xdpgate-common/` — the four pinned maps' names, key layouts and capacities,
+  shared by the program and the CLIs.
+- `xdpgate-load` (`xdpgate/src/bin/xdpgate-load.rs`) — loads the object,
+  attaches XDP in **generic/SKB mode**, pins the four maps under
+  `/sys/fs/bpf/xdpgate`. Run once at boot.
+- `xdpgate/src/protected.rs` — parses `protected.conf`, refuses configurations
+  that would cut the host off, and reconciles the live maps to the file. Used by
+  **both** binaries so attach and reload cannot drift apart.
+- `xdpgate-ctl` (`xdpgate/src/bin/xdpgate-ctl.rs`) — per-SPA map editor +
+  operator tooling
   (`open`/`close`/`reload`/`export`/`add-protected`/`del-protected`/`list`/`gc`).
-- `whats-on-ip` — audit helper. Lists which listening sockets are actually
-  reachable on a given local IP (wildcard binds answer on *every* address, so
-  "nothing bound specifically to X" ≠ "nothing listening on X"). Its
+- Both CLIs call the system's `libbpf.so.1` through a small hand-written
+  binding (`xdpgate/src/libbpf.rs`); see
+  `docs/adr/0002-userspace-calls-system-libbpf-through-hand-written-binding.md`.
+- `whats-on-ip` — audit helper, in Python. Lists which listening sockets are
+  actually reachable on a given local IP (wildcard binds answer on *every*
+  address, so "nothing bound specifically to X" ≠ "nothing listening on X"). Its
   `--preflight` mode grades each protected IP's overlap with the management
   plane as HARD (default-route source — fails) or SOFT (candidate Tailscale
   endpoint — warns; `--strict` fails). Used by `make audit` / `make preflight`.
@@ -41,16 +53,110 @@ inbound packet
 
 ## Build & install
 
-Developed and tested on **Ubuntu 24.04 LTS (Noble Numbat)**.
+Developed on **Ubuntu 24.04 LTS (Noble Numbat)**, the only supported OS. CI
+builds and tests every change natively on amd64 and on arm64, the architecture
+of AWS Graviton. At runtime the gate needs only glibc and the system's
+`libbpf.so.1` (package `libbpf1`, which `iproute2` already depends on), plus
+`python3`, `ip` and `unshare` for the test that installing runs first.
+
+### Installing a release
+
+Each [release](https://github.com/mlbright/xdpgate/releases) has one tarball
+for amd64 and one for arm64 (Graviton 2, 3 and 4), a `SHA256SUMS` file, and a
+GitHub build attestation for each file. On a Graviton instance:
 
 ```sh
-make deps               # installs clang llvm libbpf-dev libelf-dev make (via apt)
-make
-make install            # /usr/local/sbin + /usr/local/lib/xdpgate + units
+v=0.2.0 arch=arm64      # arch=amd64 on x86-64
+base=https://github.com/mlbright/xdpgate/releases/download/$v
+curl -fL --remote-name-all "$base/xdpgate-$v-linux-$arch.tar.gz" "$base/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify "xdpgate-$v-linux-$arch.tar.gz" -R mlbright/xdpgate  # optional
+tar -xzf "xdpgate-$v-linux-$arch.tar.gz"
+sudo "xdpgate-$v-linux-$arch/install.sh"
 ```
 
-The optional `make verify` target additionally needs `bpftool`, which ships in
-the kernel tooling: `apt-get install linux-tools-$(uname -r)`.
+`install.sh` runs the traffic test below against the tarball's files, on this
+host's kernel, before copying anything, and installs nothing if any check
+fails. It installs to `/usr/local/sbin`, `/usr/local/lib/xdpgate` (with a
+`VERSION` file naming the release) and `/etc/systemd/system`, then prints the
+steps that follow. It honours `DESTDIR`.
+
+### Building from source
+
+Building needs three things, none of them Ubuntu packages. The steps are the
+same on a Graviton instance.
+
+1. **[rustup](https://rustup.rs).** The checkout pins two toolchains: stable
+   1.99.1 for the CLIs (`rust-toolchain.toml`) and `nightly-2026-10-30` with
+   `rust-src` for the XDP program (`xdpgate-ebpf/rust-toolchain.toml`). Run
+   `rustup toolchain install` in both directories once.
+2. **LLVM 23 from [apt.llvm.org](https://apt.llvm.org)**, the major version the
+   pinned nightly uses:
+   ```sh
+   wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key |
+     sudo gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg
+   echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" |
+     sudo tee /etc/apt/sources.list.d/llvm-23.list
+   sudo apt-get update && sudo apt-get install llvm-23 llvm-23-dev
+   ```
+3. **bpf-linker 0.11.0**, built against that LLVM:
+   ```sh
+   LLVM_PREFIX=/usr/lib/llvm-23 cargo install bpf-linker --version 0.11.0 \
+     --locked --no-default-features --features llvm-23
+   ```
+
+If the nightly's LLVM and bpf-linker's ever differ, the build fails with
+`ERROR llvm: Invalid record`. Moving the nightly is therefore a paired step:
+bump its date, install the matching LLVM, and rebuild bpf-linker.
+
+```sh
+make                    # as yourself
+sudo make install       # runs install.sh, as above
+make dist               # this build as a release-style tarball, in dist/
+```
+
+`make install` never builds, so root needs no Rust toolchain. Builds use the
+committed `Cargo.lock` files (`--locked`); the only crate is `libc`.
+
+The optional `make verify` target and the golden tests need `bpftool`, which
+ships in the kernel tooling: `apt-get install linux-tools-$(uname -r)`.
+
+### Tests
+
+```sh
+make check              # unit tests, then the golden and traffic suites
+```
+
+- `cargo test` — unit tests: config parsing, reconcile planning, listing order,
+  durations, strict number parsing, and expiry arithmetic on junk map values.
+- `tests/goldens.sh` — 148 transcripts recorded from the original C build
+  (output, exit code and the maps left behind), which every build must
+  reproduce byte for byte. The few deliberate differences, with their reasons,
+  are in `tests/goldens/deviations.sed`.
+- `tests/traffic.sh` — attaches the build to a veth pair and sends real
+  traffic: drop, pass, the SPA carve-out, grants, expiry, reload and detach,
+  over IPv4 and IPv6.
+
+Both suites run under sudo, which `make check` asks for, inside throwaway
+namespaces with their own bpffs, so a gate running on the host is never
+touched. `tests/rerecord.sh` records new goldens by rebuilding the original C
+from git, which needs the original C build's packages:
+`apt-get install clang llvm libbpf-dev libelf-dev`.
+
+### Releasing
+
+```sh
+make publish VERSION=0.2.0
+```
+
+This checks that the working tree is clean and is the tip of `main` on GitHub,
+runs `make check`, then tags the commit `0.2.0` and pushes the tag. Nothing is
+built or uploaded from your machine. The tag starts `.github/workflows/ci.yml`,
+which builds and tests both architectures natively (arm64 on GitHub's
+`ubuntu-24.04-arm` runners) and, only if both pass, publishes the release with
+its checksums and attestations. If that run fails, the tag stays without a
+release: fix the problem and release the next patch version, since tags never
+move. See `docs/adr/0003-releases-are-tarballs-built-by-ci-and-installed-test-first.md`.
 
 ## The protected set is a config file
 
@@ -107,8 +213,9 @@ management plane (SSH, WireGuard/Tailscale, etc.) lives on IPs you never add to
 the protected set** — the only carve-out is the SPA port, so anything on a
 protected IP is gated.
 
-1. `make install`. This drops `protected.conf.example` in `/etc/xdpgate/` and
-   never overwrites a real `protected.conf`.
+1. Install: a release's `install.sh`, or `sudo make install` from a build.
+   This drops `protected.conf.example` in `/etc/xdpgate/` and never overwrites
+   a real `protected.conf`.
 2. Pick a service address. `sudo whats-on-ip --self` shows what each local IP
    actually exposes; choose one that shares nothing with the management plane —
    typically an address you assign solely to the service.
@@ -161,8 +268,8 @@ grant. The GC timer only reclaims map slots after the fact. Keep the
 - **Key is `(src, proto, dport)`, not destination-scoped.** An SPA for
   `tcp/443` from X opens `tcp/443` from X to *any* protected IP. To scope per
   destination, add `$DST` to `xdpgate-ctl open`, add a `daddr` field to
-  `allow_*_key` in `common.h`, and set it in the XDP lookup. One-field change
-  on each side.
+  `GrantKey4`/`GrantKey6` in `xdpgate-common/src/lib.rs`, and set it in the XDP
+  lookup. One-field change on each side.
 - **Multi-port SPA opens only the first port** (mrash/fwknop#327). Use one port
   per SPA, or extend the value to a port set.
 - **`$SRC` vs `$PKT_SRC`.** We key on `$SRC` (the IP fwknop authorises, which is
@@ -172,7 +279,8 @@ grant. The GC timer only reclaims map slots after the fact. Keep the
 - **ICMP / PMTUD.** With `ALLOW_ICMP_TO_PROTECTED=0` (default, strict), ICMP and
   ICMPv6 to protected IPs are dropped — this blackholes Path MTU Discovery
   ("frag needed" / "packet too big") to those services. IPv6 NDP is link-local
-  and unaffected. Flip the flag in `common.h` and rebuild if PMTUD matters.
+  and unaffected. Flip `ALLOW_ICMP_TO_PROTECTED` in `xdpgate-common/src/lib.rs`
+  and rebuild if PMTUD matters.
 - **Fragments.** Non-first IPv4 fragments (no L4 header) to a protected dest are
   dropped; the first fragment must carry the real port to match. Fine for
   TCP-with-PMTUD services; relevant if you gate something that fragments.
@@ -180,10 +288,32 @@ grant. The GC timer only reclaims map slots after the fact. Keep the
   parsed; packets with ext headers to a protected dest hit the no-L4 path and
   are dropped (fail-closed). Add a header walk if you need them.
 - **`--rand-port` SPAs** break the single UDP/62159 carve-out. Widen the
-  `SPA_PORT` check to a range in `xdpgate.bpf.c` if you use random SPA ports.
+  `spa_carve_out` check to a range in `xdpgate-ebpf/src/main.rs` if you use
+  random SPA ports.
 - **Generic mode** runs after GRO and is slower than native `ena` XDP, but it's
   the right call for portability and for not perturbing the data path. Moving to
   native later is just an attach-flag change.
+
+## Follow-ups
+
+The Rust port kept the C's behaviour exactly, gaps included. These are left
+for after it:
+
+- **A grant opens its port on every protected address**, not one destination
+  (the first caveat above).
+- **`del-protected` will remove the last protected address**, leaving the gate
+  attached but gating nothing.
+- **`whats-on-ip --preflight` reads a missing map pin as "gate not attached"**
+  and exits 0. `main` makes it an error, which takes root to tell apart, so its
+  `make preflight` runs under sudo.
+- **Amazon Linux 2023 is not a release target.** Its libbpf is 1.6.1 and its
+  glibc 2.34. The binaries would probably run, but four goldens record libbpf
+  1.3.0's own messages, and testing it needs an Amazon Linux host.
+- **A Graviton runner.** Releases are tested on GitHub's arm64 runners (Azure
+  Cobalt 100, the same Arm family), not on Graviton itself; `install.sh`'s
+  traffic run is the test on Graviton. A self-hosted Graviton runner would add
+  one before every release, at the cost of AWS credentials and of locking down a
+  self-hosted runner on a public repository.
 
 ## Quick reference
 
