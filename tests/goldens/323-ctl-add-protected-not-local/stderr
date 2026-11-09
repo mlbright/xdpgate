@@ -1,0 +1,2 @@
+warning: runtime only - the next reload or reboot reverts this.
+  Add 198.51.100.7 to /etc/xdpgate/protected.conf to make it durable.

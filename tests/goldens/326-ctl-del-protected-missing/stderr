@@ -1,0 +1,2 @@
+warning: runtime only - the next reload or reboot restores this.
+  Remove 192.0.2.11 from /etc/xdpgate/protected.conf to make it durable.

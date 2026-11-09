@@ -1,0 +1,2 @@
+libbpf: elf: 'junk.o' is not a proper ELF object
+open junk.o failed: Unknown error 4001

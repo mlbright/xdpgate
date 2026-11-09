@@ -1,0 +1,14 @@
+xdp gate0: generic xdpgate
+pins: allow_v4 allow_v6 protected_v4 protected_v6
+map allow_v4: hash key 7 value 8 max_entries 4096 flags 0x0
+  (0 entries)
+map allow_v6: hash key 19 value 8 max_entries 4096 flags 0x0
+  (0 entries)
+map protected_v4: hash key 4 value 1 max_entries 256 flags 0x0
+  (2 entries)
+  192.0.2.10 = 01
+  198.51.100.7 = 01
+map protected_v6: hash key 16 value 1 max_entries 256 flags 0x0
+  (2 entries)
+  ::ffff:c000:20a = 01
+  2001:db8:ffff::7 = 01

@@ -2,6 +2,8 @@
 xdpgate.bpf.o
 xdpgate-load
 xdpgate-ctl
+# the test suites import their Python helpers
+__pycache__/
 # Prerequisites
 *.d
 

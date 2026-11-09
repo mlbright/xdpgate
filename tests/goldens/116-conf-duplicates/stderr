@@ -1,0 +1,3 @@
+/etc/xdpgate/protected.conf:2: warning: duplicate address '192.0.2.10', ignoring
+/etc/xdpgate/protected.conf:4: warning: duplicate address '2001:DB8:1:0::10', ignoring
+/etc/xdpgate/protected.conf:5: warning: duplicate address '192.0.2.10', ignoring

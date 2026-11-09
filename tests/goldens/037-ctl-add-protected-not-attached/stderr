@@ -1,0 +1,2 @@
+cannot open pinned map /sys/fs/bpf/xdpgate/protected_v4: No such file or directory
+  (is xdpgate-load attached?)

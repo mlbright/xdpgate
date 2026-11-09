@@ -1,0 +1,1 @@
+XDPGATE_CONF=/etc/xdpgate/other.conf xdpgate-ctl add-protected 192.0.2.11

@@ -1,0 +1,4 @@
+xdp gate0: none
+pins: protected_v4
+map protected_v4: hash key 8 value 1 max_entries 16 flags 0x0
+  (0 entries)

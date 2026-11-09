@@ -1,0 +1,2 @@
+gate not attached: nothing is loaded, so there is nothing to
+check yet. Start it (systemctl start xdpgate) and re-run.
