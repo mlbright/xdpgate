@@ -13,6 +13,10 @@ xdpgate-common = { path = "../xdpgate-common" }
 name = "xdpgate-ctl"
 path = "src/bin/xdpgate-ctl.rs"
 
+[[bin]]
+name = "xdpgate-load"
+path = "src/bin/xdpgate-load.rs"
+
 # Not installed: the Makefile runs it on every freshly built xdpgate.bpf.o.
 [[bin]]
 name = "check-object"

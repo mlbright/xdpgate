@@ -16,3 +16,5 @@ status: accepted
 ## Consequences
 
 The declarations must match libbpf 1.3.0's ABI. Moving to a newer libbpf is a deliberate change: check the declarations and re-record the goldens that contain libbpf's messages.
+
+The kernel copies a map's own key and value sizes in and out of whatever buffers it is handed, so a pin with a different layout (left by another version, or made by hand) would let it write past them. The C never checked. Every map handle in the binding therefore asks the kernel for the map's key and value sizes first (`bpf_obj_get_info_by_fd`, one call the C did not make) and refuses a mismatch with a message naming both layouts. That is the port's one addition to the C's behaviour, and well-formed maps never see it.

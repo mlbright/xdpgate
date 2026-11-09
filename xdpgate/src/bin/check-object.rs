@@ -135,7 +135,8 @@ fn main() -> ExitCode {
     let obj = match Object::open(&path, PIN_DIR) {
         Ok(obj) => obj,
         Err(err) => {
-            eprintln!("check-object: libbpf could not open {display}: {err}");
+            let message = String::from_utf8_lossy(&err.message()).into_owned();
+            eprintln!("check-object: libbpf could not open {display}: {message}");
             return ExitCode::FAILURE;
         }
     };

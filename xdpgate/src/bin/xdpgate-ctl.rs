@@ -30,10 +30,10 @@ use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
 
 use xdpgate::glibc::{self, ENOENT};
-use xdpgate::libbpf::{MapFd, Pod};
+use xdpgate::libbpf::{MapError, MapFd, Pod};
 use xdpgate::protected::{DeclaredSet, ProtectedSet, conf_path};
 use xdpgate::text::{self, err, out};
-use xdpgate::{Reported, c_string, cat, pin_path};
+use xdpgate::{Reported, c_string, cat, map_error_text, pin_path};
 use xdpgate_common::{
     ALLOW_V4, ALLOW_V6, GrantExpiry, GrantKey4, GrantKey6, IPPROTO_TCP, IPPROTO_UDP, PROTECTED_V4,
     PROTECTED_V6, ProtectedKey4, ProtectedKey6, ProtectedValue,
@@ -93,14 +93,24 @@ fn run(args: &[OsString]) -> i32 {
 /// Opens the map pinned under `name`, explaining a failure on stderr.
 fn open_map<K: Pod, V: Pod>(name: &CStr) -> Result<MapFd<K, V>, Reported> {
     let path = pin_path(name);
-    MapFd::open_pinned(&path).map_err(|errno| {
-        err(&cat!(
-            "cannot open pinned map ",
-            path,
-            ": ",
-            errno.message(),
-            "\n  (is xdpgate-load attached?)\n"
-        ));
+    MapFd::open_pinned(&path).map_err(|e| {
+        let why = map_error_text(&e);
+        match e {
+            MapError::Errno(_) => err(&cat!(
+                "cannot open pinned map ",
+                path,
+                ": ",
+                why,
+                "\n  (is xdpgate-load attached?)\n"
+            )),
+            MapError::Layout { .. } => err(&cat!(
+                "pinned map ",
+                path,
+                " does not match this xdpgate-ctl: ",
+                why,
+                "\n"
+            )),
+        }
         Reported
     })
 }
@@ -651,14 +661,25 @@ mod tests {
 
     #[test]
     fn junk_expiries_wrap_instead_of_crashing() {
-        let clocks = Clocks { mono_ns: 5_000_000_000, wall: 1_700_000_000 };
+        let clocks = Clocks {
+            mono_ns: 5_000_000_000,
+            wall: 1_700_000_000,
+        };
         // u64::MAX reads as -1 once signed: just past, like the C.
         let far = expiry_text(u64::MAX, &clocks);
-        assert!(far.starts_with(b"expired "), "{}", String::from_utf8_lossy(&far));
+        assert!(
+            far.starts_with(b"expired "),
+            "{}",
+            String::from_utf8_lossy(&far)
+        );
         assert!(far.ends_with(b" (5s ago)\n"));
         // 2^63 reads as i64::MIN, and the subtraction wraps to the far future.
         let wrapped = expiry_text(1 << 63, &clocks);
-        assert!(wrapped.starts_with(b"expires "), "{}", String::from_utf8_lossy(&wrapped));
+        assert!(
+            wrapped.starts_with(b"expires "),
+            "{}",
+            String::from_utf8_lossy(&wrapped)
+        );
         assert!(wrapped.ends_with(b" (in 106751d 23h 47m 11s)\n"));
         assert_eq!(expiry_text(0, &clocks), b"no expiry\n");
     }
