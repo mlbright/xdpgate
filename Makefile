@@ -1,19 +1,23 @@
 # xdpgate Makefile
 # Development platform: Ubuntu 24.04 LTS (Noble Numbat).
-# Install the build toolchain with `make deps` (or see the package list below).
-CLANG    ?= clang
+#
+# Build as yourself, install as root: `make && sudo make install`. Installing
+# never builds, so root needs no Rust toolchain.
+#
+# The XDP program is Rust, built by the nightly pinned in xdpgate-ebpf/ with
+# bpf-linker; the CLIs are still C, built with `make deps`'s packages.
 CC       ?= cc
-ARCH     := $(shell uname -m | sed 's/x86_64/x86/;s/aarch64/arm64/')
-MULTIARCH := $(shell uname -m)-linux-gnu
+CARGO    ?= cargo
 
-# Core build dependencies (apt package names on Ubuntu 24.04 LTS).
+# Build dependencies of the C CLIs (apt package names on Ubuntu 24.04 LTS).
 # The optional `verify` target also needs bpftool, which ships in the
 # kernel tooling: apt-get install linux-tools-$(shell uname -r)
-APT_DEPS := clang llvm libbpf-dev libelf-dev make
+APT_DEPS := gcc libbpf-dev make
 
-BPF_CFLAGS := -O2 -g -Wall -target bpf -D__TARGET_ARCH_$(ARCH) -I/usr/include/$(MULTIARCH)
 USR_CFLAGS := -O2 -g -Wall
 LIBS       := -lbpf
+
+EBPF_OUT := xdpgate-ebpf/target/bpfel-unknown-none/release/xdpgate
 
 all: xdpgate.bpf.o xdpgate-load xdpgate-ctl
 
@@ -22,8 +26,17 @@ deps:
 	sudo apt-get update
 	sudo apt-get install -y $(APT_DEPS)
 
-xdpgate.bpf.o: xdpgate.bpf.c common.h
-	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
+# The XDP program, then the build check from ADR 0002: libbpf must see exactly
+# the four maps, with the frozen sizes and capacities, pinned by name.
+xdpgate.bpf.o: FORCE
+	@command -v bpf-linker >/dev/null || { \
+		echo "bpf-linker not found. It needs LLVM 23 from apt.llvm.org (see README.md), then:"; \
+		echo "  LLVM_PREFIX=/usr/lib/llvm-23 cargo install bpf-linker --version 0.11.0 \\"; \
+		echo "    --locked --no-default-features --features llvm-23"; \
+		exit 1; } >&2
+	cd xdpgate-ebpf && $(CARGO) build --release --locked
+	$(CARGO) run --release --locked --quiet --bin check-object -- $(EBPF_OUT)
+	cp $(EBPF_OUT) $@
 
 # The protected set is config-driven; both binaries apply it through the same
 # parse/check/reconcile routines so attach and reload cannot drift apart.
@@ -36,14 +49,18 @@ xdpgate-load: xdpgate_load.c protected_conf.o common.h protected_conf.h
 xdpgate-ctl: xdpgate_ctl.c protected_conf.o common.h protected_conf.h
 	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
 
-# The golden-transcript and netns traffic suites (tests/). They run in
-# throwaway namespaces and ask sudo for them, so the build never runs as root.
+# Unit tests, then the golden-transcript and netns traffic suites (tests/).
+# The suites run in throwaway namespaces and ask sudo for them, so the build
+# never runs as root.
 check: all
+	$(CARGO) test --locked
 	sudo tests/goldens.sh .
 	sudo tests/traffic.sh .
 
 # Verify the program loads + passes the verifier without attaching to a NIC.
-verify: xdpgate.bpf.o
+# Run as root, after `make`.
+verify:
+	@test -f xdpgate.bpf.o || { echo "no xdpgate.bpf.o; run \`make\` first" >&2; exit 1; }
 	bpftool prog load xdpgate.bpf.o /sys/fs/bpf/xdpgate_verify_test \
 		type xdp && bpftool prog | tail -3 && \
 		rm -f /sys/fs/bpf/xdpgate_verify_test
@@ -60,24 +77,13 @@ preflight:
 
 clean:
 	rm -f xdpgate.bpf.o protected_conf.o xdpgate-load xdpgate-ctl
+	$(CARGO) clean
+	cd xdpgate-ebpf && $(CARGO) clean
 
-# Never installs protected.conf itself: an existing protected set is operator
-# data, and a generated one would be a guess at what to gate.
-install: all
-	install -d /usr/local/sbin /usr/local/lib/xdpgate /etc/xdpgate
-	install -m 0755 xdpgate-load xdpgate-ctl whats-on-ip /usr/local/sbin/
-	install -m 0644 xdpgate.bpf.o /usr/local/lib/xdpgate/
-	install -m 0644 protected.conf.example /etc/xdpgate/
-	install -m 0644 xdpgate.service xdpgate-gc.service xdpgate-gc.timer \
-		/etc/systemd/system/
-	@echo
-	@echo "Next, in order:"
-	@echo "  1. cp /etc/xdpgate/protected.conf.example /etc/xdpgate/protected.conf"
-	@echo "     and list the addresses to gate (upgrading? use: xdpgate-ctl export)"
-	@echo "  2. edit IFACE= in /etc/systemd/system/xdpgate.service"
-	@echo "  3. systemctl daemon-reload"
-	@echo "  4. systemctl enable --now xdpgate.service xdpgate-gc.timer"
-	@echo
-	@echo "The gate refuses to attach without a non-empty protected.conf."
+# Runs the traffic suite against the files it is about to copy, on this
+# kernel, and installs nothing if any check fails. See install.sh.
+install:
+	./install.sh
 
-.PHONY: all deps check clean verify audit preflight install
+.PHONY: all deps check clean verify audit preflight install FORCE
+FORCE:

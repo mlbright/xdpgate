@@ -2,6 +2,9 @@
 xdpgate.bpf.o
 xdpgate-load
 xdpgate-ctl
+# cargo
+/target/
+/xdpgate-ebpf/target/
 # the test suites import their Python helpers
 __pycache__/
 # Prerequisites

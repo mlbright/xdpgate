@@ -1,0 +1,8 @@
+[package]
+name = "xdpgate-common"
+description = "The layout the XDP program and the CLIs share through the pinned maps"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

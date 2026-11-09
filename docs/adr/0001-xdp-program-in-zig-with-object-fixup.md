@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0002
 ---
 
 # The XDP program is written in Zig, and its object is fixed up after the build
