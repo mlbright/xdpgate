@@ -1,0 +1,2 @@
+warning: runtime only - the next reload or reboot restores this.
+  Remove 2001:db8:1::10 from /etc/xdpgate/protected.conf to make it durable.

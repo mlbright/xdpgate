@@ -1,0 +1,14 @@
+protected v4 0.0.0.0
+protected v4 192.0.2.10
+protected v4 192.0.2.99   [runtime only]
+protected v4 192.0.2.100
+protected v4 255.255.255.255
+protected v6 2001:db8::99   [runtime only]
+protected v6 2001:db8:1::9
+protected v6 2001:db8:1::a
+protected v6 2001:db8:1::10
+protected v6 fe80::1
+missing   v4 10.0.0.1   [in config, removed at runtime]
+missing   v4 192.0.2.9   [in config, removed at runtime]
+missing   v6 ::1   [in config, removed at runtime]
+missing   v6 ff02::1   [in config, removed at runtime]

@@ -1,0 +1,3 @@
+attach
+protect 192.0.2.20
+unprotect 2001:db8:1::10

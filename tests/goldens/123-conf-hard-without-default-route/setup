@@ -1,0 +1,4 @@
+attach
+write_conf 192.0.2.1 2001:db8:1::1
+ip route del default
+ip -6 route del default

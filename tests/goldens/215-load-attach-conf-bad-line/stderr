@@ -1,0 +1,4 @@
+/etc/xdpgate/protected.conf:2: CIDR is not supported ('192.0.2.0/24').
+  The protected maps are exact-match hashes; give each
+  address its own line.
+refusing to attach: the protected set is unusable

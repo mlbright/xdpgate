@@ -1,0 +1,2 @@
+mkdir /sys/fs/bpf/xdpgate: Read-only file system
+is the bpf filesystem mounted at /sys/fs/bpf?

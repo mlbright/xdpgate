@@ -36,6 +36,12 @@ xdpgate-load: xdpgate_load.c protected_conf.o common.h protected_conf.h
 xdpgate-ctl: xdpgate_ctl.c protected_conf.o common.h protected_conf.h
 	$(CC) $(USR_CFLAGS) $< protected_conf.o -o $@ $(LIBS)
 
+# The golden-transcript and netns traffic suites (tests/). They run in
+# throwaway namespaces and ask sudo for them, so the build never runs as root.
+check: all
+	sudo tests/goldens.sh .
+	sudo tests/traffic.sh .
+
 # Verify the program loads + passes the verifier without attaching to a NIC.
 verify: xdpgate.bpf.o
 	bpftool prog load xdpgate.bpf.o /sys/fs/bpf/xdpgate_verify_test \
@@ -74,4 +80,4 @@ install: all
 	@echo
 	@echo "The gate refuses to attach without a non-empty protected.conf."
 
-.PHONY: all deps clean verify audit preflight install
+.PHONY: all deps check clean verify audit preflight install

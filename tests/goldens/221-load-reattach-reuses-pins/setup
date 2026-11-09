@@ -1,0 +1,8 @@
+attach
+protect 192.0.2.20
+unprotect 2001:db8:1::10
+grants <<'EOF'
+v4 198.51.100.7 tcp 22 +3600
+v6 2001:db8:2::7 udp 53 never
+EOF
+ip link set dev gate0 xdpgeneric off

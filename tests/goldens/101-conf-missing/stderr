@@ -1,0 +1,5 @@
+/etc/xdpgate/protected.conf: No such file or directory
+  An empty protected set gates nothing: every packet takes the
+  "destination not protected -> PASS" branch. There is no safe
+  default, so /etc/xdpgate/protected.conf must name at least one address.
+  Copy protected.conf.example and list one address per line.

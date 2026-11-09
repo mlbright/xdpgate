@@ -1,0 +1,1 @@
+usage: xdpgate-ctl close <ip> <tcp|udp> <port>

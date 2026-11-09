@@ -1,0 +1,2 @@
+mkdir /sys/fs/bpf/xdpgate
+bpftool map create /sys/fs/bpf/xdpgate/protected_v4 type hash key 8 value 1 entries 16 name protected_v4
