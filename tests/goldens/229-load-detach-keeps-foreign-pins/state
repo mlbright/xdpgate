@@ -1,4 +1,0 @@
-xdp gate0: none
-pins: other
-map other: hash key 4 value 4 max_entries 4 flags 0x0
-  (0 entries)

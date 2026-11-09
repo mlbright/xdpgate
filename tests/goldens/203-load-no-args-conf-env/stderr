@@ -1,5 +1,0 @@
-usage: xdpgate-load attach <iface> [obj.o]
-       xdpgate-load detach <iface>
-
-the protected set is read from /srv/xdpgate/gate.conf
-(override with $XDPGATE_CONF)

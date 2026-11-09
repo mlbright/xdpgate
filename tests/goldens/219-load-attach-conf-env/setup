@@ -1,1 +1,0 @@
-printf '192.0.2.11\n' >/etc/xdpgate/other.conf

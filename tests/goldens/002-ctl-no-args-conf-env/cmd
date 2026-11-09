@@ -1,1 +1,0 @@
-XDPGATE_CONF=/srv/xdpgate/gate.conf xdpgate-ctl

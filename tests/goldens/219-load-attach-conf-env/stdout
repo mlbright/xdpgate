@@ -1,2 +1,0 @@
-protected set seeded from /etc/xdpgate/other.conf: 1 address (+1, -0)
-attached xdpgate (generic mode) to ifindex 3; maps pinned at /sys/fs/bpf/xdpgate

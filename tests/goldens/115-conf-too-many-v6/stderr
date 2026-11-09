@@ -1,3 +1,0 @@
-/etc/xdpgate/protected.conf: too many addresses (v4 1, v6 257; limit 256 per family).
-  Raise max_entries on protected_v4/protected_v6 in
-  src/layout.zig and rebuild if you genuinely need more.

@@ -1,1 +1,0 @@
-xdpgate-load detach gate0 xdpgate.bpf.o

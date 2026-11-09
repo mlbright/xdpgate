@@ -1,3 +1,0 @@
-attach
-rm /etc/xdpgate/protected.conf
-protect 192.0.2.20

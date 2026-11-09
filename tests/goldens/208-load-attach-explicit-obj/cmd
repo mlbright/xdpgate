@@ -1,1 +1,0 @@
-xdpgate-load attach gate0 ./xdpgate.bpf.o

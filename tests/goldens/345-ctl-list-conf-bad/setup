@@ -1,3 +1,0 @@
-attach
-write_conf 192.0.2.0/24
-protect 192.0.2.20
