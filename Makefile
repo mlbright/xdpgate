@@ -11,7 +11,14 @@ CARGO    ?= cargo
 
 EBPF_OUT := xdpgate-ebpf/target/bpfel-unknown-none/release/xdpgate
 
-all: xdpgate.bpf.o xdpgate-load xdpgate-ctl
+# The release tag at a tagged commit, else what git describe says about this
+# one: "0.2.0-3-gabc1234", with "-dirty" for uncommitted changes.
+BUILD_VERSION := $(shell git describe --tags --match '[0-9]*.[0-9]*.[0-9]*' \
+	--dirty 2>/dev/null || echo unknown)
+ARCH := $(shell uname -m | sed 's/^x86_64$$/amd64/; s/^aarch64$$/arm64/')
+DIST := xdpgate-$(BUILD_VERSION)-linux-$(ARCH)
+
+all: xdpgate.bpf.o xdpgate-load xdpgate-ctl VERSION
 
 # Every Rust binary in the workspace: the two CLIs and check-object.
 cargo-build:
@@ -31,6 +38,29 @@ xdpgate.bpf.o: cargo-build
 
 xdpgate-load xdpgate-ctl: cargo-build
 	cp target/release/$@ $@
+
+# install.sh installs it as /usr/local/lib/xdpgate/VERSION.
+VERSION: FORCE
+	@echo $(BUILD_VERSION) >$@.new
+	@cmp -s $@.new $@ && rm $@.new || mv $@.new $@
+
+# A release tarball for this machine's architecture. It is laid out like the
+# top of the checkout, so install.sh, and the traffic suite it runs first,
+# work from it unchanged. Metadata is fixed, so the same files make the same
+# tarball.
+dist: all
+	rm -rf dist/$(DIST)
+	mkdir -p dist/$(DIST)/tests
+	install -m 0755 xdpgate-load xdpgate-ctl whats-on-ip install.sh dist/$(DIST)/
+	install -m 0644 xdpgate.bpf.o VERSION README.md LICENSE \
+		xdpgate.service xdpgate-gc.service xdpgate-gc.timer \
+		protected.conf.example access.conf.example dist/$(DIST)/
+	install -m 0755 tests/traffic.sh dist/$(DIST)/tests/
+	install -m 0644 tests/traffic.py tests/lib.sh dist/$(DIST)/tests/
+	tar -C dist --sort=name --owner=0 --group=0 --numeric-owner --mode=go-w \
+		--mtime=@$$(git log -1 --format=%ct 2>/dev/null || echo 0) \
+		-cf - $(DIST) | gzip -9n >dist/$(DIST).tar.gz
+	@echo dist/$(DIST).tar.gz
 
 # Unit tests, then the golden-transcript and netns traffic suites (tests/).
 # The suites run in throwaway namespaces and ask sudo for them, so the build
@@ -60,7 +90,8 @@ preflight:
 	@./whats-on-ip --preflight
 
 clean:
-	rm -f xdpgate.bpf.o xdpgate-load xdpgate-ctl
+	rm -f xdpgate.bpf.o xdpgate-load xdpgate-ctl VERSION
+	rm -rf dist
 	$(CARGO) clean
 	cd xdpgate-ebpf && $(CARGO) clean
 
@@ -69,4 +100,5 @@ clean:
 install:
 	./install.sh
 
-.PHONY: all cargo-build check clean verify audit preflight install
+.PHONY: all cargo-build check clean dist verify audit preflight install FORCE
+FORCE:
