@@ -1,0 +1,8 @@
+# Proposes bumps for the GitHub Actions in .github/workflows, which are pinned
+# to commit hashes. The crates are locked and updated by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
