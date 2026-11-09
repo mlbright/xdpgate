@@ -18,7 +18,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 dest=${DESTDIR:-}
 
-for f in xdpgate-load xdpgate-ctl xdpgate.bpf.o; do
+for f in xdpgate-load xdpgate-ctl xdpgate.bpf.o VERSION; do
 	if [ ! -f "$here/$f" ]; then
 		echo "install.sh: no $f in $here; run \`make\` first" >&2
 		exit 1
@@ -29,7 +29,7 @@ if [ "$(id -u)" != 0 ]; then
 	exit 1
 fi
 
-echo "Testing these files on this kernel before installing them:"
+echo "Testing xdpgate $(cat "$here/VERSION") on this kernel before installing it:"
 if ! "$here/tests/traffic.sh" "$here"; then
 	echo "install.sh: the traffic suite failed, so nothing was installed" >&2
 	exit 1
@@ -39,7 +39,7 @@ install -d "$dest/usr/local/sbin" "$dest/usr/local/lib/xdpgate" \
 	"$dest/etc/xdpgate" "$dest/etc/systemd/system"
 install -m 0755 "$here/xdpgate-load" "$here/xdpgate-ctl" "$here/whats-on-ip" \
 	"$dest/usr/local/sbin/"
-install -m 0644 "$here/xdpgate.bpf.o" "$dest/usr/local/lib/xdpgate/"
+install -m 0644 "$here/xdpgate.bpf.o" "$here/VERSION" "$dest/usr/local/lib/xdpgate/"
 install -m 0644 "$here/protected.conf.example" "$dest/etc/xdpgate/"
 install -m 0644 "$here/xdpgate.service" "$here/xdpgate-gc.service" \
 	"$here/xdpgate-gc.timer" "$dest/etc/systemd/system/"
