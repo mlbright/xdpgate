@@ -5,10 +5,16 @@
 //! of the crate calls the safe wrappers.
 #![allow(unsafe_code)]
 
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_int, c_void};
 use std::io;
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::{self, NonNull};
+
+use xdpgate_common::{GrantExpiry, GrantKey4, GrantKey6, ProtectedKey6};
+
+use crate::glibc::Errno;
 
 /// `BPF_PROG_TYPE_XDP` from `enum bpf_prog_type`.
 pub const BPF_PROG_TYPE_XDP: u32 = 6;
@@ -72,6 +78,108 @@ unsafe extern "C" {
     fn bpf_map__pin_path(map: *const bpf_map) -> *const c_char;
 
     fn bpf_program__type(prog: *const bpf_program) -> u32;
+
+    // The low-level map calls return a negative errno on failure.
+    fn bpf_obj_get(pathname: *const c_char) -> c_int;
+    fn bpf_map_lookup_elem(fd: c_int, key: *const c_void, value: *mut c_void) -> c_int;
+    fn bpf_map_update_elem(
+        fd: c_int,
+        key: *const c_void,
+        value: *const c_void,
+        flags: u64,
+    ) -> c_int;
+    fn bpf_map_delete_elem(fd: c_int, key: *const c_void) -> c_int;
+    fn bpf_map_get_next_key(fd: c_int, key: *const c_void, next_key: *mut c_void) -> c_int;
+}
+
+/// `BPF_ANY`: create the entry or overwrite it.
+const BPF_ANY: u64 = 0;
+
+/// A map key or value that crosses into the kernel as raw bytes.
+///
+/// # Safety
+///
+/// Only for types with no padding, for which every bit pattern is valid.
+pub unsafe trait Pod: Copy {}
+
+unsafe impl Pod for u8 {}
+unsafe impl Pod for u32 {}
+unsafe impl Pod for ProtectedKey6 {}
+unsafe impl Pod for GrantKey4 {}
+unsafe impl Pod for GrantKey6 {}
+unsafe impl Pod for GrantExpiry {}
+
+fn check(rc: c_int) -> Result<c_int, Errno> {
+    if rc < 0 { Err(Errno(-rc)) } else { Ok(rc) }
+}
+
+/// A BPF map, by file descriptor, with its key and value types.
+pub struct MapFd<K, V> {
+    fd: OwnedFd,
+    _kv: PhantomData<fn() -> (K, V)>,
+}
+
+impl<K: Pod, V: Pod> MapFd<K, V> {
+    /// Opens the map pinned at `path`.
+    pub fn open_pinned(path: &CStr) -> Result<Self, Errno> {
+        let fd = check(unsafe { bpf_obj_get(path.as_ptr()) })?;
+        Ok(MapFd {
+            fd: unsafe { OwnedFd::from_raw_fd(fd) },
+            _kv: PhantomData,
+        })
+    }
+
+    pub fn lookup(&self, key: &K) -> Result<V, Errno> {
+        let mut value = MaybeUninit::<V>::uninit();
+        check(unsafe {
+            bpf_map_lookup_elem(
+                self.fd.as_raw_fd(),
+                (key as *const K).cast(),
+                value.as_mut_ptr().cast(),
+            )
+        })?;
+        Ok(unsafe { value.assume_init() })
+    }
+
+    /// Creates or overwrites the entry for `key`.
+    pub fn update(&self, key: &K, value: &V) -> Result<(), Errno> {
+        check(unsafe {
+            bpf_map_update_elem(
+                self.fd.as_raw_fd(),
+                (key as *const K).cast(),
+                (value as *const V).cast(),
+                BPF_ANY,
+            )
+        })?;
+        Ok(())
+    }
+
+    pub fn delete(&self, key: &K) -> Result<(), Errno> {
+        check(unsafe { bpf_map_delete_elem(self.fd.as_raw_fd(), (key as *const K).cast()) })?;
+        Ok(())
+    }
+
+    /// The key after `key` in the kernel's hash order, or the first key.
+    pub fn next_key(&self, key: Option<&K>) -> Result<K, Errno> {
+        let prev = key.map_or(ptr::null(), |k| (k as *const K).cast());
+        let mut next = MaybeUninit::<K>::uninit();
+        check(unsafe {
+            bpf_map_get_next_key(self.fd.as_raw_fd(), prev, next.as_mut_ptr().cast())
+        })?;
+        Ok(unsafe { next.assume_init() })
+    }
+
+    /// Every key, in the kernel's hash order. Ends at the last key or at the
+    /// first error, as the C's loops did. Each key is fetched only when
+    /// asked for.
+    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
+        let mut prev: Option<K> = None;
+        std::iter::from_fn(move || {
+            let next = self.next_key(prev.as_ref()).ok()?;
+            prev = Some(next);
+            Some(next)
+        })
+    }
 }
 
 /// An opened BPF object file. Closing it (on drop) detaches nothing: an
