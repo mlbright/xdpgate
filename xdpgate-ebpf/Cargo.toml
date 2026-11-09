@@ -1,0 +1,27 @@
+[package]
+name = "xdpgate-ebpf"
+description = "The XDP program; no crates beyond xdpgate-common (ADR 0001)"
+edition = "2024"
+license = "GPL-2.0-only"
+publish = false
+
+[dependencies]
+xdpgate-common = { path = "../xdpgate-common" }
+
+# The object file; the Makefile copies it to xdpgate.bpf.o.
+[[bin]]
+name = "xdpgate"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+debug = 2
+panic = "abort"
+codegen-units = 1
+
+# Its own workspace: built by a different toolchain, for a different target.
+[workspace]

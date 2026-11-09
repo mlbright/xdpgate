@@ -8,8 +8,9 @@
 # DIR holds the build to test, as for goldens.sh. CTL_DIR, if given, supplies
 # xdpgate-ctl instead, to check one build's ctl against another build's maps.
 #
-# `make install` runs this before copying anything, so it needs nothing beyond
-# unshare, ip and /usr/bin/python3. The gated side is a private network and
+# install.sh (and so `make install`) runs this before copying anything, on the
+# host it installs to, so it needs nothing beyond unshare, ip and
+# /usr/bin/python3. The gated side is a private network and
 # mount namespace with its own bpffs; the client is a second network namespace
 # that lives only as long as the test.
 set -u

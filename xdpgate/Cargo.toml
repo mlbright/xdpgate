@@ -1,0 +1,15 @@
+[package]
+name = "xdpgate"
+description = "The xdpgate command-line tools and the build's object check"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+xdpgate-common = { path = "../xdpgate-common" }
+
+# Not installed: the Makefile runs it on every freshly built xdpgate.bpf.o.
+[[bin]]
+name = "check-object"
+path = "src/bin/check-object.rs"
+test = false

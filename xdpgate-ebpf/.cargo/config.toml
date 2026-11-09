@@ -1,0 +1,10 @@
+[build]
+target = "bpfel-unknown-none"
+
+[unstable]
+build-std = ["core"]
+
+[target.bpfel-unknown-none]
+linker = "bpf-linker"
+# BTF is how libbpf learns each map's type, sizes, capacity and pinning.
+rustflags = ["-C", "debuginfo=2", "-C", "link-arg=--btf"]

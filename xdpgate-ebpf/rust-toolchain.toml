@@ -1,0 +1,7 @@
+# A dated nightly, so its LLVM major (23) stays the one bpf-linker is built
+# against. Moving it is a paired step: bump the date, install the matching
+# LLVM, rebuild bpf-linker. See ADR 0001.
+[toolchain]
+channel = "nightly-2026-10-30"
+components = ["rust-src"]
+profile = "minimal"
