@@ -27,6 +27,9 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 
+# Seconds added to CLOCK_MONOTONIC inside each scenario: 100 days.
+CLOCK_SHIFT=${CLOCK_SHIFT:-8640000}
+
 mask() {
 	sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/YYYY-MM-DD hh:mm:ss/g'
 }
@@ -64,6 +67,9 @@ inner() {
 	ln -s "$LOAD" "$sb/bin/xdpgate-load"
 	ln -s "$CTL" "$sb/bin/xdpgate-ctl"
 	ln -s "$TESTS/../whats-on-ip" "$sb/bin/whats-on-ip"
+	# The caller's bpftool, wherever it is: a hand-installed one in
+	# /usr/local/sbin is not on the scenarios' PATH.
+	ln -s "$BPFTOOL" "$sb/bin/bpftool"
 	cp "$OBJ" "$sb/work/xdpgate.bpf.o"
 	cd "$sb/work"
 	set +e
@@ -94,7 +100,8 @@ record=0
 need_root
 find_artifacts "$1"
 shift
-export LOAD CTL OBJ
+BPFTOOL=$(command -v bpftool) || die "bpftool not found"
+export LOAD CTL OBJ BPFTOOL
 
 if [ $# -gt 0 ]; then
 	scenarios=("$@")
@@ -115,7 +122,13 @@ for scen in "${scenarios[@]}"; do
 	out=$work/$name
 	mkdir "$out"
 
-	if ! unshare --mount --net --propagation private "$0" --inner "$scen" "$out" "$work/sb"; then
+	# Grants that expired up to a day ago need a CLOCK_MONOTONIC that far
+	# from zero, which a freshly booted host (a CI runner) does not have.
+	# A time namespace moves the clock for the scenario's processes; the
+	# kernel's own bpf_ktime_get_ns() stays put, which is fine here because
+	# no packets flow in these scenarios.
+	if ! unshare --mount --net --time --monotonic "$CLOCK_SHIFT" \
+		--propagation private "$0" --inner "$scen" "$out" "$work/sb"; then
 		echo "FAIL $name: could not build the sandbox"
 		fail=$((fail + 1))
 		continue
