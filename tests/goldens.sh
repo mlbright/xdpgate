@@ -75,6 +75,7 @@ inner() {
 	set +e
 
 	local run=(env -i "PATH=$path" HOME=/root TZ=UTC LC_ALL=C "TESTS=$TESTS"
+		"CLOCK_REF=$sb/clock"
 		bash --noprofile --norc)
 	if [ -f "$scen/setup" ]; then
 		if ! "${run[@]}" -c '. "$TESTS/lib.sh"; set -e; . "$1"' setup \
@@ -85,7 +86,7 @@ inner() {
 	fi
 	"${run[@]}" -c "$(cat "$scen/cmd")" >"$out/stdout" 2>"$out/stderr" </dev/null
 	echo $? >"$out/exit"
-	$PY "$TESTS/state.py" dump gate0 >"$out/state" 2>&1
+	CLOCK_REF=$sb/clock $PY "$TESTS/state.py" dump gate0 >"$out/state" 2>&1
 }
 
 if [ "${1:-}" = --inner ]; then

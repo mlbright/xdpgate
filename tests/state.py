@@ -73,18 +73,36 @@ def fmt_key(raw):
     return "key " + raw.hex()
 
 
-def fmt_value(raw, now):
+def grants_clock():
+    """The clock reading `grants` last wrote its expiries from, if any."""
+    try:
+        with open(os.environ["CLOCK_REF"]) as f:
+            return int(f.read())
+    except (KeyError, OSError, ValueError):
+        return None
+
+
+def fmt_value(raw, now, ref=None):
     if len(raw) != 8:
         return raw.hex()
     expiry, = struct.unpack("=Q", raw)
     if expiry == 0:
         return "never"
+    # An expiry a whole number of seconds from the `grants` clock was written
+    # by `grants`: measure it from there, so the answer does not depend on
+    # how long the scenario took to get to this dump.
+    if ref is not None and (expiry - ref) % 1000000000 == 0:
+        now = ref
     if expiry <= now:
         return "expired"
     return "+%ds" % round((expiry - now) / 1e9)
 
 
 def dump(iface):
+    # Read the clock before anything else: every bpftool call below takes
+    # time, and a remaining lifetime is rounded to the second.
+    now = now_ns()
+    ref = grants_clock()
     print(xdp_line(iface))
     if not os.path.isdir(PIN_DIR):
         print("pins: none")
@@ -97,7 +115,6 @@ def dump(iface):
         print("map %s: %s key %d value %d max_entries %d flags 0x%x" % (
             name, info["type"], info["bytes_key"], info["bytes_value"],
             info["max_entries"], info["flags"]))
-        now = now_ns()
         entries = json.loads(bpftool("-j", "map", "dump", "pinned", path))
         print("  (%d entries)" % len(entries))
         if len(entries) > MAX_SHOWN:
@@ -106,7 +123,7 @@ def dump(iface):
         for e in entries:
             key = bytes(int(b, 16) for b in e["key"])
             val = bytes(int(b, 16) for b in e["value"])
-            rows.append((key, "  %s = %s" % (fmt_key(key), fmt_value(val, now))))
+            rows.append((key, "  %s = %s" % (fmt_key(key), fmt_value(val, now, ref))))
         for _, line in sorted(rows):
             print(line)
 
@@ -141,6 +158,9 @@ def grants():
             PIN_DIR, fam, " ".join(hexargs(allow_key(fam, src, proto, port))),
             " ".join(hexargs(struct.pack("=Q", expiry)))))
     batch(lines)
+    if "CLOCK_REF" in os.environ:
+        with open(os.environ["CLOCK_REF"], "w") as f:
+            f.write(str(now))
 
 
 def protected_map(addr):
