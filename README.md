@@ -66,7 +66,7 @@ for amd64 and one for arm64 (Graviton 2, 3 and 4), a `SHA256SUMS` file, and a
 GitHub build attestation for each file. On a Graviton instance:
 
 ```sh
-v=0.2.0 arch=arm64      # arch=amd64 on x86-64
+v=0.2.1 arch=arm64      # arch=amd64 on x86-64
 base=https://github.com/mlbright/xdpgate/releases/download/$v
 curl -fL --remote-name-all "$base/xdpgate-$v-linux-$arch.tar.gz" "$base/SHA256SUMS"
 sha256sum -c --ignore-missing SHA256SUMS
@@ -146,11 +146,11 @@ from git, which needs the original C build's packages:
 ### Releasing
 
 ```sh
-make publish VERSION=0.2.0
+make publish VERSION=0.2.1
 ```
 
 This checks that the working tree is clean and is the tip of `main` on GitHub,
-runs `make check`, then tags the commit `0.2.0` and pushes the tag. Nothing is
+runs `make check`, then tags the commit `0.2.1` and pushes the tag. Nothing is
 built or uploaded from your machine. The tag starts `.github/workflows/ci.yml`,
 which builds and tests both architectures natively (arm64 on GitHub's
 `ubuntu-24.04-arm` runners) and, only if both pass, publishes the release with
